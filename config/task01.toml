@@ -1,0 +1,15 @@
+# Paths are relative to project_root, which is relative to this file.
+project_root = ".."
+raw_dir = "data/raw/rc1841"
+extracted_dir = "data/interim/rc1841"
+output_dir = "outputs/task01"
+expected_pairs = 1841
+gallery_size = 8
+random_seed = 42
+overlay_alpha = 0.45
+
+[archive_limits]
+max_files = 20000
+max_total_bytes = 5000000000
+max_member_bytes = 100000000
+max_compression_ratio = 1000
