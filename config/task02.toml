@@ -1,0 +1,31 @@
+# All relative paths are resolved from this file's directory.
+base_config = "task01.toml"
+output_dir = "../outputs/task02"
+dataset_name = "rc1841-curated-v1"
+random_seed = 42
+# Optional evidence CSV: sample_id,source_group,evidence. No filename guessing.
+# source_groups_file = "source_groups.csv"
+
+[cleaning]
+remove_redundant_vertices = true
+out_of_bounds_tolerance = 0.0
+geometry_epsilon = 0.000000001
+exif_policy = "match_annotation_dimensions"
+allow_rgb_conversion = true
+cross_class_overlap = "exclude"
+allow_empty_annotations = false
+deduplicate_identical_pairs = true
+
+[similarity]
+phash_distance = 6
+dhash_distance = 8
+thumbnail_mae = 0.12
+aspect_log_tolerance = 0.15
+annotation_iou = 0.98
+group_capture_sessions = true
+capture_session_gap_seconds = 600
+
+[splitting]
+fractions = [0.70, 0.15, 0.15]
+search_restarts = 24
+rare_class_image_threshold = 60

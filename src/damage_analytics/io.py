@@ -16,6 +16,18 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def contained_file(root: Path, relative: str) -> Path:
+    """Resolve a relative report path without allowing escapes or missing files."""
+    path = (root / relative).resolve()
+    if (
+        Path(relative).is_absolute()
+        or not path.is_relative_to(root.resolve())
+        or not path.is_file()
+    ):
+        raise ValueError(f"Invalid manifest path: {relative}")
+    return path
+
+
 def write_json(path: Path, value: Any) -> None:
     """Write human-readable UTF-8 JSON, disallowing NaN and infinity."""
     path.parent.mkdir(parents=True, exist_ok=True)

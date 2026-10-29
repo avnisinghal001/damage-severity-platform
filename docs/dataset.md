@@ -126,9 +126,11 @@ Annotation-only checks against declared JSON dimensions found negative coordinat
 - `crack146`: an x coordinate approximately `-0.339`.
 - `damage794`: an x coordinate approximately `-38.5`.
 
-These findings were checked without installing dependencies. Full image decoding
-and dimension comparison remain pending. `analyze` will exclude invalid pairs,
-write diagnostic reports, and exit with status 2. Do not silently clamp these
+These findings were initially checked without installing dependencies. Subsequent
+Task 01 analysis found 1,810 valid pairs and 31 exclusions under its stored-frame
+policy; the additional 29 are EXIF dimension mismatches addressed explicitly in
+Task 02 below. `analyze` excludes invalid pairs, writes reports, and exits with
+status 2. Do not silently clamp these
 negative coordinates or edit raw data; resolve them with a documented curation
 policy or a separately versioned correction process in a later task.
 
@@ -152,6 +154,161 @@ No severity frequencies are calculated.
 - Images vary in resolution and capture conditions. Pixel area is not physical area
   without calibrated scale information.
 - Background, category names, or pixel fractions cannot establish structural safety.
-- No verified source/structure grouping or clean split is supplied by this project.
-  Resolve duplicates and grouping before claiming generalization.
+- Physical source/structure independence is not verified. Task 02 supplies splits
+  isolated by known evidence; unknown-source leakage remains unresolved.
 - Task 01 has no trained model, severity estimator, dataset download, or augmentation.
+
+## Task 02 curation policy and evidence
+
+Task 02 audits the actual decoded dataset and the completed Task 01 reports. Task 01's
+31 invalid pairs comprise 29 stored/declared dimension mismatches and two samples with
+negative coordinates. All 29 mismatches have EXIF orientation 6, stored dimensions
+4032×3024 and declared dimensions 3024×4032. Applying the EXIF transform to a derivative
+matches the declared coordinate frame; annotation vertices are not rotated or scaled.
+This evidence supports the configured transform but still warrants expert visual review.
+
+The supplied photographs comprise 1,840 RGB images and one CMYK image. Task 02 fully
+decodes inputs and exports lossless RGB PNG derivatives. CMYK conversion is logged;
+it is not a color-calibration claim. Missing files, unreadable files, ambiguous stems,
+unknown labels, unsupported shapes/flags, unresolvable dimensions, transparent pixels
+without a compositing convention, and ambiguous EXIF frames are not silently accepted.
+
+The default cleaning policy is conservative:
+
+| Finding | Default disposition and reason |
+| --- | --- |
+| Exact consecutive duplicate/repeated closing vertex | Remove explicitly; boundary and all raster pixels must remain unchanged |
+| Coordinate exactly at width/height | Accept source edge convention; map to last pixel as in Task 01 |
+| Negative/oversized coordinate | Exclude the entire sample; tolerance clamp defaults to zero |
+| Nonfinite/non-numeric point or malformed polygon | Exclude the sample; no type coercion |
+| Non-simple ring, retraced edge, nonadjacent edge contact, zero-area ring | Exclude; no buffer, convex hull, guessed topology repair, or polygon dropping |
+| Geometry degenerating after edge-to-pixel mapping | Exclude; the actual pixel-frame ring must also be valid |
+| Same-label polygon overlap | Accept as a semantic union and report overlapping pixels |
+| Cross-label raster overlap | Exclude; inclusive shared raster boundaries count conservatively as conflicts |
+| Empty annotation/mask | Exclude by default; no verified undamaged-negative meaning is assumed |
+| Exact image with disagreeing/unusable annotations | Exclude every member; no majority vote or arbitrary representative |
+| Exact image and identical mask | Keep the lexicographically smallest source ID by default; record redundant IDs |
+| Heuristic near duplicate | Retain, record evidence, place the full connected group in one split |
+
+All shape indices and affected IDs appear in `decisions.csv`. One invalid shape excludes
+the entire sample so ground truth is not silently made incomplete. Shape checks continue
+after finding an invalid shape. Mask checks are not performed on uninterpretable geometry;
+`sample_audit.csv` explicitly marks check coverage. A `fix` decision describes an evaluated
+policy action; `retained_samples` in the quality report distinguishes fixes actually exported
+from candidates subsequently excluded for another reason. Exclusion reasons can overlap.
+
+You may opt into a nonzero coordinate-clamp tolerance or last-shape precedence in the
+configuration, but these are scientific policy changes, recorded in a new dataset version.
+They should follow annotation review, not attempts to improve validation/test metrics.
+
+### Duplicate and source evidence
+
+Exact comparisons cover original image/JSON bytes, stored and selected-frame RGB pixels,
+and canonical ordered polygon geometry with labels and image size. Ring start and winding
+do not affect geometry identity; polygon order is preserved because of possible precedence.
+Empty annotations do not establish grouping evidence. Exact annotation geometry is grouped
+conservatively, even though identical outlines alone do not prove a common physical source.
+
+Near-image candidates must satisfy all configured conditions: 63-AC-bit pHash distance ≤6,
+64-bit dHash distance ≤8, RGB thumbnail mean absolute error ≤0.12, and absolute log-aspect
+difference ≤0.15. These are transparent heuristic thresholds, not calibrated match probabilities.
+Near-annotation candidates are checked within visual candidates by mean foreground-class
+IoU ≥0.98 on nearest-neighbor 32×32 mask thumbnails. All candidate edges are retained in
+`similarity_edges.csv`. A missed candidate is possible, particularly for crops, rotation,
+large lighting changes, or different views of one structure.
+
+No physical structure/source identifiers are supplied in the inspected data. Filename
+families such as `damage`, `crack`, or `corrosion_` are not proven source IDs and are not
+invented as such. Optional `source_groups_file` configuration accepts a CSV with columns
+`sample_id,source_group,evidence`; entries must reference known unique IDs and include
+nonempty evidence. These edges join the same conservative connected components.
+Excluded nodes remain in the grouping graph so they cannot break known relationships.
+
+Thirty-three photographs also carry camera/time metadata. The 29 EXIF-rotated images
+include a close timestamp sequence with the same camera make/model. Task 02 links
+session candidates using a configurable 600-second maximum adjacent timestamp gap.
+DateTimeOriginal is preferred; DateTime is a weaker fallback that may indicate editing.
+Without serial numbers, camera make/model is not device-unique. This conservative
+temporal grouping reduces known related-sample risk while leaving physical identity
+uncertain; invalid/missing metadata creates no group.
+
+### Splits, statistics and readiness
+
+Fractions default to 70/15/15 with seed 42. A deterministic whole-group greedy search
+with 24 restarts and coordinate descent balances image counts and multi-label image
+presence. Class coverage is prioritized; no oversampling, class dropping, augmentation,
+or model feedback is involved. Pixel-level distributions are reported rather than
+silently optimized. Fewer than three groups carrying a class makes all-three coverage
+infeasible; other unmet coverage is reported as a heuristic limitation, not proved impossible.
+
+The test split is created once for a named content-addressed version and checksummed.
+Reuse that version and do not tune policies, grouping thresholds, or model choices using
+test performance. Code/config/input/environment changes create a distinct version and
+must not be used as an excuse to search for a favorable test split.
+
+Class distributions are calculated for the curated population and separately for each
+split, including background. Reports include multi-label combinations, pairwise occurrences,
+rare-class flags, excluded IDs, dimensions, source modes, and foreground pixel imbalance.
+Rarity is descriptive; no category is discarded because it is rare. Background remains
+unannotated complement rather than verified healthy concrete. No severity labels are added.
+
+The quality report distinguishes verified technical consistency from scientific validity.
+`CONDITIONAL_RESEARCH_USE` means accepted artifacts and known grouping/partition checks passed.
+It does not mean all annotations are expert-correct, every physical source is independent,
+or the dataset is globally leakage-free. Read the generated report and remaining limitations
+before making benchmark or generalization claims.
+
+### Verified release snapshot: 28 October 2026
+
+Version `rc1841-curated-v1-d34771dbb662406a` retains **1,617** of **1,841** original pairs;
+**224** unique samples are excluded. All source files were readable and all 3,682
+extracted member files matched the unchanged archives. Of 29 EXIF alignment candidates,
+27 survive geometry checks; `crack22919` and `crack22920` do not. `corrosion_103` is the
+single CMYK conversion. Seventeen of 26 redundant-vertex cleanup candidates survive all
+checks. Five retained samples have accepted same-label overlap.
+
+Nonexclusive exclusion counts are 171 non-simple source/pixel rings, two out-of-bounds
+annotations, 26 cross-class overlaps, 24 exact-image annotation-conflict members, and
+four members of exact-image groups containing unusable ground truth. All non-simple
+rings are also flagged by the pixel-ring check, and some duplicate/out-of-bounds
+findings share IDs; do not add these counts to estimate unique exclusions.
+
+For disjoint accounting: 171 non-simple-ring samples, one additional out-of-bounds
+sample, 26 cross-class-overlap samples, 24 exact-image annotation conflicts, and two
+additional partners excluded because an identical image's annotation is unusable sum
+to 224. Every affected source ID and complete reason set is in `exclusions.csv`.
+
+| Source label | Curated images | Pixels | Pixel fraction | Train / validation / test images |
+| --- | ---: | ---: | ---: | --- |
+| Background | 1,617 | 640,762,443 | 82.157503% | 1,132 / 243 / 242 |
+| Microcrack | 267 | 1,227,168 | 0.157345% | 187 / 40 / 40 |
+| Structural crack | 730 | 14,304,195 | 1.834060% | 511 / 109 / 110 |
+| Minor spalling | 78 | 249,272 | 0.031961% | 54 / 12 / 12 |
+| Moderate spalling | 112 | 8,533,026 | 1.094091% | 78 / 17 / 17 |
+| Delamination | 152 | 16,651,509 | 2.135029% | 106 / 23 / 23 |
+| Rebar corrosion | 486 | 83,981,983 | 10.768031% | 340 / 73 / 73 |
+| Concrete crushing | 44 | 7,038,306 | 0.902440% | 30 / 7 / 7 |
+| Structural deformation | 46 | 7,171,666 | 0.919539% | 32 / 7 / 7 |
+
+There are 779,919,568 total pixels, 252 multi-label images, and approximately 336.91:1
+max/min foreground pixel imbalance. Counts are on the final curated population, not
+the raw polygon table above. Restoring high-resolution EXIF-aligned images changes
+the pooled pixel denominator substantially relative to Task 01's 1,810-image population.
+
+Train/validation/test contain 1,132/243/242 samples and 898/192/189 known-evidence
+components, respectively. All eight foreground classes occur in every split, with no
+unmet coverage constraints in this run. Across curated samples there are 1,279 components;
+the largest contains 27 retained members of the temporal sequence. No component,
+direct known-evidence edge, or duplicate manifest ID crosses splits.
+
+The full audited population produces 674 near-image candidate edges, 82 near-annotation
+candidate edges, 28 temporal edges, and 14 exact-image pairs detected by each of three
+fingerprints. These are overlapping evidence counts, not independent sample counts.
+No exact JSON-byte or eligible canonical-geometry duplicates were found. There are no
+supplied verified physical source IDs, so unknown-source leakage remains unverified.
+
+All 1,617 saved samples pass complete pixel/hash/label/partition checks. The separate
+`verify-curation` command also passes. The test suite passes 89 tests and 21 subtests
+with no skips; Ruff passes. The verdict remains **CONDITIONAL_RESEARCH_USE**, with
+expert annotation review, terminology resolution, and physical source identification
+outstanding. No severity target or model was created.

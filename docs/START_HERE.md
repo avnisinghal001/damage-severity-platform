@@ -33,3 +33,8 @@ silently adjusting them. This is a data-quality finding, not necessarily a bug.
 
 The [Task 01 lesson](learning/task_01.md) explains the concepts, every module, each
 command, how to interpret the reports, and what to do when a check fails.
+
+The project now also includes [Task 02](learning/task_02.md): explicit cleaning,
+duplicate/source evidence, reproducible grouped splits, and a verified frozen release.
+Start with its quality report before using any split. Technical consistency passes,
+but expert annotation correctness and all physical source identities remain unresolved.
