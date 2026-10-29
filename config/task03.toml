@@ -1,0 +1,44 @@
+# Paths are relative to this file. Never follows Task 02's mutable latest pointer.
+release_dir = "../outputs/task02/versions/rc1841-curated-v1-d34771dbb662406a"
+release_id = "rc1841-curated-v1-d34771dbb662406a"
+checksums_sha256 = "f58383140a91339a7839abbe6d99b5c65e2b271d9fe33cf0b43335dcc3f7eef8"
+output_dir = "../outputs/task03"
+seed = 42
+device = "auto" # auto = available Apple MPS, otherwise CPU; no silent runtime fallback
+deterministic = false
+num_workers = 0
+
+[data]
+image_size = [256, 256] # height, width
+mean = [0.5, 0.5, 0.5] # predefined normalization, not estimated using validation/test
+std = [0.5, 0.5, 0.5]
+horizontal_flip = 0.5
+vertical_flip = 0.0
+crop_probability = 0.5 # training only; evaluation always uses the full image
+crop_size = [512, 512] # source-pixel height, width, capped at source dimensions
+foreground_crop_probability = 0.8 # uniformly choose a present foreground class, then a pixel
+
+[model]
+base_channels = 16
+depth = 3
+normalization_groups = 8
+
+[optimization]
+epochs = 50
+batch_size = 4
+learning_rate = 0.001
+weight_decay = 0.0001
+dice_weight = 0.5
+class_weighting = "inverse_sqrt" # training manifest pixel counts only, or "none"
+max_class_weight = 10.0
+patience = 8
+min_delta = 0.0001
+gradient_clip = 1.0
+
+[reporting]
+comparison_samples = 4
+
+[sanity]
+overfit_samples = 2
+overfit_epochs = 100
+overfit_target_miou = 0.90

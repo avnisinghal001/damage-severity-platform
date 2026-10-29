@@ -157,3 +157,69 @@ the explicit source-frame policy. It checks class IDs, sizes, background complem
 saved counts, group components, and exact split partitions. This is strong processing
 consistency evidence; the same documented Pillow rasterizer is used, so it does not
 independently certify polygon edge semantics or human annotation truth.
+
+## Task 03: version-pinned PyTorch segmentation
+
+Task 03 lives entirely in `training/` with a separate `python -m damage_analytics.training`
+entrypoint. It leaves Task 01/02 implementations and frozen releases unchanged. The
+`training` dependency extra adds torch only; there is no pretrained-weight retrieval.
+
+```mermaid
+flowchart TD
+    Config[task03.toml: exact version and checksum seal] --> Pin[manifests.py]
+    Frozen[Frozen Task 02 split CSVs and RGB/ID PNGs] --> Pin
+    Pin --> QC[verify-data and resize audit: train/validation only]
+    Pin --> Train[training Dataset: paired crops/flips/letterbox]
+    Pin --> Val[validation Dataset: full-image letterbox]
+    Train --> Model[lightweight GroupNorm U-Net: nine logits]
+    Model --> Loss[training-only weighted CE + optional Dice]
+    Loss --> Adam[AdamW + clipping + checkpointing]
+    Val --> Select[native-grid validation foreground mIoU]
+    Adam --> Select
+    Select --> Best[best.pt: validation-selected]
+    Best --> Predict[RGB-image inference: native-size class IDs]
+    Best --> Final[explicit final-test command only]
+    Test[Frozen test split: never a training/selection input] --> Final
+```
+
+`manifests.py` authenticates the pinned checksum-manifest digest, sealed metadata and
+split hashes, exact labels, partition sizes, and group separation. It never uses the
+mutable latest pointer. Selected image/mask contents are rehashed and validated before
+opening. Full integrity verification hashes test artifacts as bytes but does not decode
+test pixels or generate test statistics/predictions. Normal test sample access is guarded.
+
+`transforms.py` is independent of torch so geometry/resize-loss auditing works without
+PyTorch. It records letterbox geometry, applies identical spatial transforms to image and
+mask, uses ignored padding, and restores full-image predictions. Crop restoration as an
+invented full-image prediction is rejected. `dataset.py` converts arrays to tensors,
+seeds workers, and derives augmentation from seed/epoch/sample position rather than
+worker scheduling. Variable-resolution native validation masks stay in CPU lists.
+
+`model.py` has configurable channels/depth and small-batch GroupNorm. The default encoder
+uses 16/32/64/128 channels; bilinear decoder stages concatenate matching skip features.
+The head emits nine logits. `losses.py` supervises resized/cropped masks with weighted CE
+and optional present-foreground soft Dice. `weights.py` uses training manifest counts only.
+No target normalization, class remapping, split recreation, or severity inference occurs.
+
+`engine.py` handles epoch loops, AdamW, nonfinite-loss/gradient rejection, clipping,
+validation, and patience. It saves every strict best validation score while applying
+`min_delta` only to patience. `metrics.py` pools int64 confusion counts at native image
+resolution before computing per-class metrics. Undefined ratios are JSON null; classes
+absent from both sides are excluded from overlap means, while false-positive-only classes
+contribute zero. Foreground mIoU excludes background from averaging, not from mistakes.
+
+`experiments.py` records configuration, release/split fingerprints, code hashes, Git commit,
+actual environment, seed and device. `runtime.py` selects available MPS/CPU and requests
+deterministic operations. `checkpoints.py` atomically saves portable model states plus
+optimizer state and loads trusted local files with explicit `weights_only=True`.
+No exact resume interface is implemented; cross-device/version bitwise equality is not promised.
+
+`evaluation.py` uses checkpoint-bound preprocessing and training weights, recreates a
+full-image validation or explicitly requested final-test loader, and stores immutable
+evaluation artifacts under Task 03. It verifies final-test eligibility against completed
+normal training's best checkpoint and refuses overfit/synthetic models. `inference.py`
+produces ID masks/comparisons without opening known test-release images. `plots.py` keeps
+rendering separate from numeric metrics. `smoke.py` is an independent synthetic CPU check.
+
+See [the Task 03 lesson](learning/task_03.md) for tensor examples, model/loss explanations,
+complete commands, expected output files, limitations, and interview questions.

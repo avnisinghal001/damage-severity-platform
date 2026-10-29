@@ -38,3 +38,8 @@ The project now also includes [Task 02](learning/task_02.md): explicit cleaning,
 duplicate/source evidence, reproducible grouped splits, and a verified frozen release.
 Start with its quality report before using any split. Technical consistency passes,
 but expert annotation correctness and all physical source identities remain unresolved.
+
+[Task 03](learning/task_03.md) adds the PyTorch segmentation workflow. Data checks and
+resize/metric tests run with existing packages; PyTorch execution is currently blocked
+by the missing dependency. Install only when permitted, start with the synthetic smoke
+and tiny overfit checks, and reserve the explicit final-test command until decisions are frozen.

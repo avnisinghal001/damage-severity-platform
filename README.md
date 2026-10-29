@@ -10,6 +10,12 @@ immutable dataset releases. Start with the [Task 02 workflow](#task-02-curation-
 or the [beginner lesson](docs/learning/task_02.md). A technically valid release does
 not prove expert annotation correctness or absence of unknown-source leakage.
 
+Task 03 adds a from-scratch PyTorch U-Net and a version-pinned training/evaluation
+workflow. See [Task 03 commands](#task-03-semantic-segmentation) and the complete
+[training lesson and viva guide](docs/learning/task_03.md). PyTorch is not installed
+in the inspected environment: preprocessing/metric checks passed, while model execution
+and eight PyTorch tests remain unverified. No test-set model evaluation was performed.
+
 The [RC1841 source](https://data.mendeley.com/datasets/yfhwfcrfmk/1)
 (DOI: `10.17632/yfhwfcrfmk.1`) describes damage segmentation.
 **The actual supplied label archive contains JSON polygons, not raster masks.**
@@ -369,3 +375,170 @@ An earlier processing-only release remains as immutable history; `latest.json` p
 to the final version that includes capture-session evidence. Neither release has
 been used for model tuning. Expert review, source identification, and category
 terminology resolution remain prerequisites for stronger benchmark claims.
+
+## Task 03 semantic segmentation
+
+`config/task03.toml` pins `rc1841-curated-v1-d34771dbb662406a` and the SHA-256 of its
+sealed checksum manifest. Task 03 never follows `latest.json`, reruns curation, recreates
+splits, or changes Task 01/02 code or data. It uses their existing 1,132/243/242 splits.
+The added `training` dependency extra declares PyTorch; torchvision is unnecessary.
+No dependency, dataset, or pretrained-weight installation/download was executed.
+
+Run from the repository root. Installation is an instruction for you, not an operation
+performed during implementation. Use a Python/OS/PyTorch combination with compatible
+wheels; package installation and PyTorch runtime compatibility are unverified here.
+
+```bash
+# 1. Create only if necessary, then activate.
+if [ ! -d .venv ]; then
+    python3 -m venv .venv
+fi
+source .venv/bin/activate
+
+# 2. Install declared extras when permitted. NOT executed during implementation.
+python -m pip install -e '.[dev,training]'
+
+# 3. Verify the exact pinned release and audit resizing before training.
+python -m damage_analytics.training verify-data
+python -m damage_analytics.training audit-data
+
+# 4. Inspect actual tensor batches and run a tiny synthetic CPU smoke test.
+python -m damage_analytics.training inspect-loader
+python -m damage_analytics.training smoke
+
+# 5. Run tests, then check tiny-subset memorization before a full experiment.
+python -m pytest -q
+python -m ruff check src tests
+python -m damage_analytics.training overfit --run-id overfit_001
+
+# 6. Train normally; only train and validation are consumed.
+python -m damage_analytics.training train --run-id unet_001
+
+# 7. Evaluate the best checkpoint on validation and generate comparisons.
+python -m damage_analytics.training validate \
+  --checkpoint outputs/task03/experiments/unet_001/best.pt
+
+# 8. Predict one known VALIDATION image, using the checkpoint's saved preprocessing.
+python -m damage_analytics.training predict \
+  --checkpoint outputs/task03/experiments/unet_001/best.pt \
+  --image outputs/task02/versions/rc1841-curated-v1-d34771dbb662406a/images/000016.png \
+  --prediction-id validation_example_001
+```
+
+Use `--device cpu` before the subcommand to force CPU, for example:
+`python -m damage_analytics.training --device cpu train --run-id cpu_001`.
+`auto` chooses available Apple MPS, otherwise CPU; unsupported MPS/deterministic
+operations fail visibly. There is no hidden runtime fallback or cross-device bitwise guarantee.
+
+Do **not** run the following as a routine training step. After all model/configuration
+choices are frozen, this separate explicit command opens the test set:
+
+```bash
+python -m damage_analytics.training final-test \
+  --checkpoint outputs/task03/experiments/unet_001/best.pt
+```
+
+Final test requires a completed normal run's validation-selected best checkpoint and
+refuses synthetic/overfit models. Its result directory cannot be overwritten. This
+guard does not prevent deliberate test tuning across different experiments; maintain
+the protocol. Ordinary prediction rejects known test-release image paths/hashes.
+Integrity verification reads sealed test file bytes and partition metadata only;
+train/validation auditing does not decode or evaluate test samples.
+
+### Task 03 architecture and output locations
+
+```text
+config/task03.toml
+src/damage_analytics/training/
+├── __init__.py
+├── __main__.py
+├── cli.py                  # Separate Task 03 commands; earlier entrypoints untouched
+├── config.py               # Hyperparameters, path validation, ignore-index convention
+├── manifests.py            # Pinned seals/schemas/partitions, selected-pair verification
+├── transforms.py           # Shared crop/letterbox/flip geometry; RGB-only normalization
+├── dataset.py              # PyTorch Dataset, collator, seeded DataLoader
+├── audit.py                # Train/validation resize fidelity and train-only class weights
+├── weights.py              # Capped inverse-square-root training pixel weights
+├── model.py                # Configurable lightweight nine-logit GroupNorm U-Net
+├── losses.py               # Ignored-padding cross entropy and optional foreground Dice
+├── metrics.py              # Pooled confusion counts, IoU/Dice/precision/recall
+├── runtime.py              # Seed setup and available MPS/CPU selection
+├── checkpoints.py          # Atomic state saves and explicit weights-only loading
+├── experiments.py          # New run directories, code/environment/dataset provenance
+├── engine.py               # Epoch loops, AdamW, clipping, early stopping, best/last states
+├── evaluation.py           # Native-resolution validation and explicit final test
+├── inference.py            # Native-size ID predictions, no severity interpretation
+├── plots.py                # Loss curves, confusion plot, RGB/GT/prediction comparisons
+└── smoke.py                # Three-step synthetic CPU/checkpoint diagnostic
+
+tests/
+├── conftest.py             # Tiny sealed synthetic release fixture
+├── test_training_data.py
+├── test_training_metrics.py
+└── test_training_torch.py
+
+docs/learning/task_03.md
+outputs/task03/                             # Git-ignored
+├── data_verification.json                  # Generated here
+├── implementation_checks.json              # Actual checks, skipped tests and blockers
+├── data_audit/                             # Generated here
+│   ├── resize_audit.json
+│   ├── resize_occurrences.csv
+│   └── training_class_weights.json
+├── loader_inspection.json                  # Requires PyTorch; not generated here
+├── synthetic_smoke/                        # Requires PyTorch
+│   ├── synthetic.pt
+│   └── smoke.json
+├── experiments/<run-id>/                    # Requires PyTorch
+│   ├── run.json
+│   ├── class_weights.json
+│   ├── history.csv
+│   ├── history.json
+│   ├── learning_curves.png
+│   ├── best.pt
+│   ├── last.pt
+│   ├── best_validation_metrics.json
+│   └── status.json
+├── evaluations/<checkpoint-hash-prefix>/    # Requires PyTorch
+│   ├── validation/
+│   └── test_final/
+│       # Each successful evaluation: metrics.json, per_class.csv,
+│       # confusion_matrix.npy/.png, comparisons/*.png
+└── inference/<prediction-id>/               # Requires PyTorch
+    ├── prediction_ids.png
+    ├── comparison.png
+    └── prediction.json
+```
+
+Run IDs, prediction IDs, smoke output, and evaluation directories refuse overwrites.
+Read existing artifacts or choose a new ID; do not delete evidence to select favorable
+results. `best.pt` tracks every strict validation foreground-mIoU improvement;
+`min_delta` separately controls early-stopping patience. Checkpoints include optimizer
+state, but this task does not implement exact interrupted-run resume.
+
+Input images become float32 N×3×H×W tensors; targets are int64 N×H×W. Source IDs remain
+0–8. Padding uses **255 only as an ignored target**, not a tenth class. Images preserve
+aspect ratio and use bilinear resizing; masks always use nearest-neighbor. Training
+may use synchronized flips and configurable source-resolution foreground-aware crops.
+Validation/inference use full images. Metrics compare native ground truth with unpadded
+predicted IDs nearest-restored to native resolution, avoiding resized-target evaluation
+that could hide thin-crack losses. Epoch losses are valid-pixel-weighted batch means;
+metrics instead pool confusion counts over the entire split.
+
+### Actual Task 03 verification
+
+- The pinned release seal and all artifact checksums passed; 1,132 train and 243
+  validation RGB/mask pairs were decoded with aligned sizes and valid IDs/counts.
+- At 256×256, no foreground class vanished completely from a train/validation image.
+  Microcrack resize/restore recall is 95.6384% train and 95.0950% validation;
+  minor-spalling recall is 97.0153% and 96.3013%. Individual fragments can still disappear.
+  These are **mask resampling diagnostics, not model results or an upper performance bound**.
+- Training-only weights were calculated from the 1,132 training manifest rows. Native
+  counts approximate the augmented distribution; cropping intentionally biases sampling.
+- **112 tests and 21 subtests passed; eight PyTorch tests skipped. Ruff passed.**
+  DataLoader/model/loss/backprop/checkpoint/training/evaluation/inference execution remains
+  unverified because PyTorch is absent. `inspect-loader` and `smoke` exited 2 with a clear
+  missing-dependency message; installation was not attempted.
+- No model checkpoint, learned metric, test prediction, or test evaluation was generated.
+  Task 02's conditional research-use/source-identity limitations still apply. Segmentation
+  classes are never reported as structural safety or severity scores.
