@@ -1,5 +1,9 @@
 # Task 03: learn nine-class semantic segmentation with a small U-Net
 
+Historical implementation snapshot: a baseline was subsequently trained and its final
+test executed. [Task 04](task_04.md) records the current verification and further
+validation-only development. Do not reuse Task 03's used test for Task 04 selection.
+
 ## 1. What Task 03 does
 
 Task 02 prepared a versioned dataset. Task 03 connects its existing train/validation/test

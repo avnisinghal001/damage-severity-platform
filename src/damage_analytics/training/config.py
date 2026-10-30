@@ -3,7 +3,7 @@
 import math
 import re
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 IGNORE_INDEX = 255
@@ -46,6 +46,18 @@ class OptimizationConfig:
     patience: int = 8
     min_delta: float = 1e-4
     gradient_clip: float = 1.0
+    validation_every: int = 1
+
+
+@dataclass(frozen=True)
+class PerformanceConfig:
+    """Execution policies; defaults preserve historical data and tensor behavior."""
+
+    persistent_workers: bool = False
+    cache_mb: int = 0
+    prefetch_factor: int = 2
+    channels_last: bool = False
+    plot_every: int = 1
 
 
 @dataclass(frozen=True)
@@ -74,6 +86,7 @@ class TrainingConfig:
     optimization: OptimizationConfig
     sanity: SanityConfig
     comparison_samples: int = 4
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
 
     def snapshot(self) -> dict:
         """Serialize effective settings with portable path strings."""
@@ -94,6 +107,7 @@ def load_training_config(path: Path) -> TrainingConfig:
         model=ModelConfig(**settings.pop("model", {})),
         optimization=OptimizationConfig(**settings.pop("optimization", {})),
         sanity=SanityConfig(**settings.pop("sanity", {})),
+        performance=PerformanceConfig(**settings.pop("performance", {})),
         **settings.pop("reporting", {}),
         **settings,
     )
@@ -167,6 +181,9 @@ def validate_config(config: TrainingConfig) -> None:
         config.comparison_samples,
         config.sanity.overfit_samples,
         config.sanity.overfit_epochs,
+        opt.validation_every,
+        config.performance.prefetch_factor,
+        config.performance.plot_every,
     ):
         if type(value) is not int or value < 1:
             raise ValueError("Counts must be positive integers")
@@ -178,3 +195,13 @@ def validate_config(config: TrainingConfig) -> None:
             raise ValueError("Loss/optimizer settings must be finite and nonnegative")
     if opt.class_weighting not in ("none", "inverse_sqrt"):
         raise ValueError("Unknown class weighting policy")
+    performance = config.performance
+    if (
+        type(performance.cache_mb) is not int
+        or performance.cache_mb < 0
+        or type(performance.persistent_workers) is not bool
+        or type(performance.channels_last) is not bool
+    ):
+        raise ValueError("Cache size must be nonnegative; execution switches must be boolean")
+    if performance.persistent_workers and config.num_workers == 0:
+        raise ValueError("Persistent workers require num_workers > 0")

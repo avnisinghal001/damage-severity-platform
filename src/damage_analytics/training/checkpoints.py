@@ -16,7 +16,7 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     *,
     epoch: int,
-    score: float,
+    score: float | None,
     metadata: dict,
     architecture: ModelConfig,
 ) -> None:

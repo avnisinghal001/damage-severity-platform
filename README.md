@@ -12,9 +12,10 @@ not prove expert annotation correctness or absence of unknown-source leakage.
 
 Task 03 adds a from-scratch PyTorch U-Net and a version-pinned training/evaluation
 workflow. See [Task 03 commands](#task-03-semantic-segmentation) and the complete
-[training lesson and viva guide](docs/learning/task_03.md). PyTorch is not installed
-in the inspected environment: preprocessing/metric checks passed, while model execution
-and eight PyTorch tests remain unverified. No test-set model evaluation was performed.
+[training lesson and viva guide](docs/learning/task_03.md). Its original implementation
+had no PyTorch runtime; a baseline was subsequently trained and its final test executed.
+**That used test is excluded from Task 04 selection and iterative comparisons.**
+Task 04 adds [controlled improvements and scoped region analytics](#task-04-improvements-and-damage-analytics).
 
 The [RC1841 source](https://data.mendeley.com/datasets/yfhwfcrfmk/1)
 (DOI: `10.17632/yfhwfcrfmk.1`) describes damage segmentation.
@@ -430,8 +431,9 @@ Use `--device cpu` before the subcommand to force CPU, for example:
 `auto` chooses available Apple MPS, otherwise CPU; unsupported MPS/deterministic
 operations fail visibly. There is no hidden runtime fallback or cross-device bitwise guarantee.
 
-Do **not** run the following as a routine training step. After all model/configuration
-choices are frozen, this separate explicit command opens the test set:
+Historical Task 03 protocol only: its final test has now already been executed.
+**Do not rerun this command for Task 04 models or comparisons.** The original explicit
+final-evaluation command is retained here to document Task 03:
 
 ```bash
 python -m damage_analytics.training final-test \
@@ -542,3 +544,252 @@ metrics instead pool confusion counts over the entire split.
 - No model checkpoint, learned metric, test prediction, or test evaluation was generated.
   Task 02's conditional research-use/source-identity limitations still apply. Segmentation
   classes are never reported as structural safety or severity scores.
+
+The bullets above record the initial Task 03 implementation. Task 04 below records
+the subsequently available trained baseline and current runtime verification.
+
+## Task 04 improvements and damage analytics
+
+Task 04 preserves Task 01–03 implementations, the original `unet_001` files and frozen
+splits. Settings live in `config/task04.toml`; a separate
+`python -m damage_analytics.analytics` entrypoint has **no final-test command**.
+No dependencies were installed/downloaded and no real-data improvement training was
+launched during implementation. Existing torch 2.15.0 runs on CPU here; MPS is unavailable.
+Task 04 defaults to strict deterministic CPU. An earlier Task 03 MPS sanity run failed
+on an unsupported deterministic operation. To deliberately use MPS, set `device="mps"`
+and `deterministic=false` in Task 04's TOML before training **all** comparison runs;
+document the nondeterminism and rerun the matched control under that same policy.
+
+### Verified baseline findings
+
+Fresh validation inference on all 243 images exactly reproduces epoch 48's foreground
+mIoU **0.23990623390029908** and confusion matrix. Saved checkpoint score, history,
+status, split provenance and ground-truth support agree. The full 50-epoch history
+shows an improving training loss and noisier validation behavior; this suggests a
+generalization/optimization gap, without proving a single cause.
+
+| Category | Validation IoU | Precision | Recall | Main concern |
+| --- | ---: | ---: | ---: | --- |
+| Microcrack | 0.1691 | 0.2014 | 0.5133 | Thin regions and false positives |
+| Structural crack | 0.4075 | 0.4489 | 0.8157 | Overprediction/class confusion |
+| Minor spalling | 0.1052 | 0.1079 | 0.8048 | Predicted area is 7.46× annotated area |
+| Moderate spalling | 0.2328 | 0.4808 | 0.3110 | Misses, often labeled corrosion |
+| Delamination | 0.1525 | 0.5341 | 0.1759 | Frequently labeled corrosion |
+| Rebar corrosion | 0.5786 | 0.6660 | 0.8150 | Strongest foreground class, still imperfect |
+| Concrete crushing | 0.0093 | 0.6910 | 0.0094 | Almost entirely missed; seven validation images |
+| Structural deformation | 0.2642 | 0.2915 | 0.7386 | Many false positives; seven validation images |
+
+The fixed-prefix gallery and targeted cases were inspected. `damage490` overpredicts
+minor spalling; `damage801` misses annotated crushing and predicts delamination;
+`Image_119_3665189` confuses corrosion/spalling with deformation. Targeted galleries
+are explicitly worst-case diagnostic selections, not representative accuracy samples.
+Class weighting is a plausible contributor, not an established cause without ablation.
+
+### Controlled manual experiments
+
+| Name | Change from saved baseline | Hypothesis / tradeoff |
+| --- | --- | --- |
+| `control` | None in model/data/optimizer/seed | Replay on the current backend for fair comparisons |
+| `capped_weights` | CE maximum class weight 10 → 1 | Soften rare-pixel false-positive bias; recall may fall |
+| `resolution_384` | Input grid 256² → 384² | Preserve detail; nominal input-pixel compute is 2.25× |
+
+All retain CE + foreground Dice, architecture, seed, batch size, epoch cap and selection
+rule. The cap changes only that hyperparameter; background and lower existing weights
+remain unchanged. Original training used nondeterministic MPS, while current runs use
+the configured backend/determinism, so variants should be judged primarily against a
+fresh matched control. Comparison rejects incompatible splits, native support,
+settings, training backend/library versions or core training code.
+
+The executed **resampling-only** audit improves validation Microcrack recall from
+95.0950% to 97.5469% at 384². This supports investigating resolution; it is not model
+accuracy, a guaranteed improvement, or a model-performance upper bound. Real-data
+training for all three designs remains manual and unexecuted here.
+
+### Damage and supported spalling labels
+
+Native class-ID masks produce exact per-class pixel counts/image percentages,
+4/8-connected semantic regions, exclusive-maximum bounding boxes, centroids, fill
+fractions, boundary flags and mixed foreground complexes. Counts are image-space
+measurements, not physical area, crack width, concrete-only surface coverage or safety.
+A reporting-size filter never changes masks or area totals. Background components are
+not counted as damage. Connected components are not verified physical instances.
+
+Only source classes **Minor spalling** and **Moderate spalling** can yield a scoped,
+category-derived label. Mixed/unsupported regions and low-score heuristic cases are
+explicitly handled. Maximum softmax and normalized entropy remain **uncalibrated**;
+no calibrated confidence or global severity/safety score is produced. Mask-only input
+has unknown model uncertainty. A confident-looking segmentation can still be wrong.
+
+The supervision audit finds:
+
+| Category | Train regions / images / groups | Validation regions / images / groups |
+| --- | --- | --- |
+| Minor spalling | 121 / 54 / 36 | 30 / 12 / 6 |
+| Moderate spalling | 85 / 78 / 67 | 21 / 17 / 12 |
+
+Regions sharing images/groups are correlated. Only six known minor-spalling validation
+groups are available, and labels share the segmentation annotation lineage. A separate
+**independent severity classifier is not justified or trained**. A future constrained
+category-discrimination study would require explicit scope, expert review and stronger
+independent evaluation; neither names nor area percentages establish overall severity.
+
+### Task 04 commands
+
+Use existing dependencies; installation is not part of this task. Run from the root:
+
+```bash
+source .venv/bin/activate
+python -m damage_analytics.analytics audit-baseline
+python -m damage_analytics.analytics plan
+python -m damage_analytics.analytics resolution-audit
+python -m damage_analytics.analytics supervision
+python -m pytest -q
+python -m ruff check src tests
+```
+
+The completed baseline audit is sealed and reused idempotently if its inputs/policies
+still match. Existing review/inference IDs refuse overwrites; view the implementation's
+generated examples or choose a fresh report ID:
+
+```bash
+python -m json.tool outputs/task04/baseline_audit/audit.json
+python -m json.tool outputs/task04/severity_supervision/assessment.json
+python -m damage_analytics.analytics predict \
+  --checkpoint outputs/task03/experiments/unet_001/best.pt \
+  --image outputs/task02/versions/rc1841-curated-v1-d34771dbb662406a/images/000016.png \
+  --report-id validation_demo_002
+python -m damage_analytics.analytics analyze-mask \
+  --mask outputs/task04/inference/validation_demo_002/prediction_ids.png \
+  --report-id existing_mask_002
+```
+
+The following are **manual, potentially lengthy training commands**. They were not run
+on real data during implementation. Review the plan/budget first; execute individually:
+
+```bash
+python -m damage_analytics.analytics train --experiment control --run-id control_s42
+python -m damage_analytics.analytics train --experiment capped_weights --run-id capped_s42
+python -m damage_analytics.analytics train --experiment resolution_384 --run-id resolution384_s42
+
+python -m damage_analytics.analytics evaluate --run-id control_s42
+python -m damage_analytics.analytics evaluate --run-id capped_s42
+python -m damage_analytics.analytics evaluate --run-id resolution384_s42
+python -m damage_analytics.analytics compare \
+  --run-id control_s42 --run-id capped_s42 --run-id resolution384_s42 \
+  --comparison-id controlled_s42
+```
+
+Per-class metrics and descriptive paired validation-group bootstrap intervals accompany
+comparisons. They do not account for training-seed variance, unknown physical sources,
+adaptive validation selection or multiple comparisons. Do not declare generalization
+from these comparisons; the already-used test stays excluded. Confirmatory claims
+would need genuinely new independent evaluation data.
+
+### Task 04 structure and outputs
+
+```text
+config/task04.toml
+src/damage_analytics/analytics/
+├── __init__.py
+├── __main__.py
+├── config.py         # Typed policies and baseline/input protection
+├── cli.py            # No test-evaluation command; training is explicit
+├── baseline.py       # History/checkpoint/report audit and error diagnosis
+├── validation.py     # Fresh validation inference and independent confusion counting
+├── experiments.py    # Saved-baseline settings, registered variants and manual training
+├── comparison.py     # Fairness gates, per-class tables, paired descriptive bootstrap
+├── components.py     # Exact run-length connected components without new dependencies
+├── regions.py        # Pixel-space region measurements and uncertainty summaries
+├── severity.py       # Only supported category-derived spalling labels
+├── supervision.py    # Pure/mixed region counts and independent-group limitations
+├── inference.py      # Native alignment, score maps and structured reports
+└── review.py         # Explicitly targeted worst-case validation galleries
+tests/
+├── test_analytics_regions.py
+├── test_analytics_comparison.py
+└── test_analytics_workflow.py
+docs/learning/task_04.md
+outputs/task04/
+├── implementation_report.json    # Actual checks and executed/unexecuted distinction
+├── baseline_audit/               # Executed: audit.json, class_errors.csv, checksums.json
+│   └── validation/               # Fresh metrics, per-class/per-image confusion,
+│                                 # predictions, comparisons and provenance
+├── experiment_plan.json         # Designs only; no model improvements claimed
+├── plans/*.json
+├── resolution_audit/             # Executed: 256² and 384² resampling diagnostics
+├── severity_supervision/         # Executed: assessment, candidates, all-complex audit
+├── targeted_validation_review/   # Executed: labeled worst-case galleries
+├── inference/baseline_validation_000016/ # Executed: native mask, score maps, damage_report.json
+├── development_history/         # Earlier implementation snapshots, not extra model trials
+├── experiments/<run-id>/         # Expected only after manual real-data training
+├── evaluations/<checkpoint-hash>/validation/ # Expected after evaluating those runs
+└── comparisons/<comparison-id>/ # Expected after manual comparison
+```
+
+The original analytics delivery included tested synthetic integration and real baseline-image
+inference. **154 tests and 21 subtests passed at that stage; Ruff passed.** The user has since
+completed the 50-epoch CPU `control_s42` run (best validation mIoU **0.2431215908**, epoch 48).
+No improvement variant or region-severity classifier has been trained, and no Task 03
+final-test score was consumed for Task 04 selection or benchmarking. See the complete
+[Task 04 lesson](docs/learning/task_04.md) for mathematics, findings, caveats and viva questions.
+
+### Task 04: training performance
+
+The shared trainer now supports bounded verified decoding caches, persistent workers
+with correct epoch propagation, optional channels-last storage, explicit validation
+cadence and tagged exploratory runs. It retains the original architecture, loss
+mathematics, frozen splits and checkpoints. CPU prediction extraction and device scalar
+handling were optimized without dropping native validation pixels. New histories record
+training, validation and artifact times; plotting need not run every epoch.
+
+Measured host medians for the same 64 training/validation images, batch size four:
+
+| Execution | Training seconds | Validation seconds |
+| --- | ---: | ---: |
+| Original CPU, four threads | 7.566 | 3.040 |
+| Optimized CPU, four threads | 6.889 | 2.631 |
+| Optional channels-last CPU | 6.018 | 2.136 |
+| MPS, strict determinism explicitly disabled | 1.431 | 0.683 |
+
+These are short throughput probes, not full-run forecasts or segmentation improvements.
+Compute dominates the CPU path. Strict deterministic MPS backward is unsupported for
+the unchanged model's bilinear upsampling in this build; CPU determinism remains the
+default. MPS is an explicit seeded, nondeterministic alternative. Never mix the old
+CPU control and new MPS variants as a matched causal comparison.
+
+```bash
+source .venv/bin/activate
+python -m damage_analytics.analytics profile --report-id my_cpu --samples 64 --repeats 3
+python -m damage_analytics.analytics profile --report-id my_loaders \
+  --suite loaders --samples 1132 --repeats 2
+python -m damage_analytics.analytics profile --report-id my_mps \
+  --device mps --nondeterministic --samples 64 --repeats 3
+python -m damage_analytics.analytics profile --report-id my_mps_batches \
+  --suite batches --device mps --nondeterministic --samples 64 --repeats 3
+python -m damage_analytics.analytics profile-summary \
+  --profile-id my_cpu --profile-id my_loaders --profile-id my_mps \
+  --profile-id my_mps_batches --report-id my_summary
+python -m pytest -q
+python -m ruff check src tests
+```
+
+Profiles write only under `outputs/task04/performance/`, refuse overwrite and never
+consume test samples. They benchmark temporary updates without saving model checkpoints.
+The full [performance lesson](docs/learning/task_04_performance.md) documents memory
+measurement limits, worker/cache/batch sweeps, every new module, validation scheduling,
+and exact commands for matched five-epoch pilots followed by selected full runs.
+No pilot or full training run was launched during performance implementation.
+
+The full 1,132-image loader sweep tested workers 0/2/4, persistence and 0/128 MiB
+caches. MPS with **two persistent workers** measured **1.122 seconds per 64 training
+images**; four workers were only slightly faster with substantially higher process
+memory. Batch eight gave little extra throughput while roughly doubling MPS allocation,
+so batch four and no cache are recommended initially. Use `--workers 2 --persistent-workers`
+with the manual MPS training commands in the lesson. Defaults remain deterministic CPU.
+
+**174 tests and 21 subtests passed, no skips; Ruff passed.** The optimized epoch evaluator
+also reproduced the existing control's confusion matrix exactly across all **54,435,143
+native validation pixels**. Original checkpoints, control artifacts, model architecture,
+paired transforms and dataset seal were verified unchanged. Actual timing tables are in
+`outputs/task04/performance/measured_summary/`; this work establishes execution speed,
+not a learned-model accuracy improvement.

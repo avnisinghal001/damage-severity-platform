@@ -223,3 +223,107 @@ rendering separate from numeric metrics. `smoke.py` is an independent synthetic 
 
 See [the Task 03 lesson](learning/task_03.md) for tensor examples, model/loss explanations,
 complete commands, expected output files, limitations, and interview questions.
+
+## Task 04: controlled improvements and image-space region analytics
+
+Task 04 adds `analytics/` and `config/task04.toml` while preserving all earlier task
+implementations and data. The original trained checkpoint is pinned by SHA-256.
+The already-executed Task 03 final test is excluded from Task 04 comparisons.
+
+```mermaid
+flowchart TD
+    Baseline[Read-only unet_001 checkpoint/history/validation artifacts] --> Audit[Fresh validation audit]
+    Frozen[Frozen train/validation splits] --> Audit
+    Audit --> Diagnosis[Confusion errors + targeted galleries]
+    Diagnosis --> Plans[Predeclared control + two single-factor variants]
+    Plans --> Manual[Explicit manual train commands only]
+    Manual --> Compare[Matched validation comparison + per-class metrics]
+    Frozen --> Supervision[Source-region/group-count audit]
+    Supervision --> Limits[No independent severity classifier justified]
+    Model[Baseline or manually trained checkpoint] --> Predict[Native mask + uncalibrated score maps]
+    Predict --> Components[Class regions + mixed foreground complexes]
+    Components --> Report[Pixel areas/boxes + scoped category-derived labels]
+    Limits --> Report
+    UsedTest[Previously used test: excluded, no evaluation path]
+```
+
+| Module | Responsibility |
+| --- | --- |
+| `config.py` | New typed policies, exact baseline pin, output isolation, single-factor designs |
+| `baseline.py` | Check checkpoint/history/status/report consistency and diagnose errors |
+| `validation.py` | Fresh validation inference, independent `add.at` confusion counts and scalar metric cross-check |
+| `experiments.py` | Reconstruct saved settings, register changes, audit resolution, explicitly launch manual runs |
+| `comparison.py` | Validate matched settings/runtime, compare per-class metrics and paired known-group bootstrap |
+| `components.py` | Run-length union-find components without installing SciPy/OpenCV |
+| `regions.py` | Exact pixel area, reporting filters, bounding boxes, centroids and mixed complexes |
+| `severity.py` | Source-category-only Minor/Moderate labels with mixed/unknown/unsupported states |
+| `supervision.py` | Count eligible source regions by image/group and document supervision limitations |
+| `inference.py` | Checkpoint/preprocessing provenance, native score restoration and structured reports |
+| `review.py` | Explicitly biased worst-case validation galleries for diagnosis |
+| `cli.py`, `__main__.py` | Separate Task 04 commands with no final-test branch |
+
+The original U-Net, Dataset, paired transforms, losses, optimizer loop and checkpoint
+loading are reused. Controlled experiments alter only existing training settings;
+there is no duplicated training loop or silently replaced baseline. All reused helpers
+receive a Task 04 output root. A capped-weight variant changes only the CE weight cap;
+the spatial variant changes only the model input grid. Same-backend replay separates
+historical MPS/current CPU differences from the interventions as far as practical.
+
+The audit regenerates native validation predictions, independently accumulates confusion
+counts, verifies scalar mIoU, and seals output artifacts. Half the L1 difference between
+count matrices is reported as a reassignment lower bound, not exact aligned prediction
+disagreement. A matching count matrix verifies aggregate metrics, not pointwise identity
+to historical predictions that were not all retained as ID masks.
+
+Comparison reads only validation results, checks identical samples/native target support,
+and requires compatible matched-control training code, package versions and runtime.
+The bootstrap resamples known validation components, not pixels or apparently independent
+fragments. Its descriptive intervals do not establish training-seed significance,
+adjust for adaptive validation selection, or prove unknown-source independence.
+
+Region analytics has two levels: same-class connected components and all-foreground
+complexes that expose mixed categories. Connectivity is configurable. Areas/bboxes
+remain in the EXIF-oriented native image coordinate frame; all area percentages divide
+by full image pixels, including background and non-concrete content. Reporting filters
+never edit masks or area totals. No physical calibration is assumed.
+
+Softmax maximum and normalized entropy are computed on the network grid, unpadded and
+nearest-restored using the same geometry as class IDs. They are explicitly uncalibrated
+review heuristics. A spalling category label is never derived from area or converted
+to an image-wide structural grade. Mixed/unsupported/uncertain cases have no single
+severity label, and global structural severity is always not assessed.
+
+Source-region supervision audits use train/validation masks only. They retain all
+complex dispositions and count unique images/groups to avoid pseudoreplication.
+No separate severity classifier is created; the available labels do not independently
+supervise overall severity, and minor-spalling validation support is only six known groups.
+See [Task 04](learning/task_04.md) for exact commands, observed findings and research limits.
+
+### Task 04 performance extension
+
+The shared training implementation now separates `engine.py` (experiment orchestration)
+from `epochs.py` (one numerically checked pass). `engine.run_epoch` remains importable
+for earlier callers. Model architecture, original checkpoints and frozen splits are
+unchanged. `selection.py` makes validation cadence and check-based patience explicit;
+the default still validates every epoch. Unvalidated history/checkpoint scores are null.
+
+`dataset.py` shares the current epoch with persistent spawned workers, and decouples
+shuffle order from worker lifetime while replaying the historical completed-epoch order.
+`cache.py` provides an optional bounded native-pair LRU with hash verification on hits.
+Cache budgets apply per dataset per process, rather than globally across a loader pool.
+
+`profiling.py` orchestrates bounded real-data probes through `profile_steps.py`,
+`timing.py` and `memory.py`. Detailed stages use MPS barriers; whole-pass throughput
+probes synchronize only at their boundaries. `profile_reports.py` produces measured
+CSV summaries. The profiler never writes training checkpoints or opens test samples.
+Its artifacts are isolated under `outputs/task04/performance/`.
+
+`config/task04.toml` owns execution policies and the shared training schedule.
+Explicit MPS training may opt out of strict determinism; the unchanged U-Net's bilinear
+upsampling backward is unsupported under strict MPS determinism in the measured build.
+Matched comparisons additionally enforce equal epoch budgets, batch sizes, validation
+cadences and execution policies. The historical CPU `control_s42` is retained, not
+misrepresented as a matched reference for a new MPS cohort.
+
+See [the performance lesson](learning/task_04_performance.md) for measured timings,
+memory caveats, benchmark commands and the manual pilot/full-experiment workflow.

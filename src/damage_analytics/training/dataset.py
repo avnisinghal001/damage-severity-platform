@@ -4,10 +4,11 @@ import random
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler, Sampler
 
+from damage_analytics.training.cache import PairCache
 from damage_analytics.training.config import DataConfig
-from damage_analytics.training.manifests import Release, Sample, read_pair
+from damage_analytics.training.manifests import Release, Sample
 from damage_analytics.training.transforms import prepare_pair
 
 
@@ -22,9 +23,22 @@ class SegmentationDataset(Dataset):
         *,
         training: bool,
         seed: int,
+        cache_mb: int = 0,
     ) -> None:
         self.release, self.samples, self.config = release, samples, config
-        self.training, self.seed, self.epoch = training, seed, 0
+        self.training, self.seed, self._epoch = training, seed, 0
+        self._shared_epoch: torch.Tensor | None = None
+        self.cache = PairCache(cache_mb)
+
+    @property
+    def epoch(self) -> int:
+        """Read the parent's epoch in persistent spawned workers as well as the main process."""
+        return self._epoch if self._shared_epoch is None else int(self._shared_epoch.item())
+
+    def share_epoch(self) -> None:
+        """Allocate a tiny shared CPU scalar before workers spawn, without a manager process."""
+        if self._shared_epoch is None:
+            self._shared_epoch = torch.tensor(self._epoch, dtype=torch.int64).share_memory_()
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -33,11 +47,13 @@ class SegmentationDataset(Dataset):
         """Derive deterministic epoch-specific augmentation independently of worker order."""
         if epoch < 0:
             raise ValueError("Epoch must be nonnegative")
-        self.epoch = epoch
+        self._epoch = epoch
+        if self._shared_epoch is not None:
+            self._shared_epoch.fill_(epoch)
 
     def __getitem__(self, index: int) -> dict:
         sample = self.samples[index]
-        image, mask = read_pair(self.release, sample)
+        image, mask = self.cache.read(self.release, sample)
         rng = np.random.default_rng(np.random.SeedSequence([self.seed, self.epoch, index]))
         rgb, labels, frame = prepare_pair(
             image, mask, self.config, training=self.training, rng=rng
@@ -69,20 +85,56 @@ def seed_worker(_worker_id: int) -> None:
     np.random.seed(seed)
 
 
+class ReplaySampler(Sampler[int]):
+    """Decouple shuffling from worker lifetime while replaying the old full-epoch order.
+
+    The old loader used one generator for its base seed and RandomSampler. Consume
+    the same base-seed draw before each full permutation, even when workers persist.
+    This preserves completed-epoch ordering for the existing PyTorch implementation.
+    """
+
+    def __init__(self, dataset: Dataset, seed: int) -> None:
+        self.generator = torch.Generator().manual_seed(seed)
+        self.sampler = RandomSampler(dataset, generator=self.generator)
+
+    def __iter__(self):
+        torch.empty((), dtype=torch.int64).random_(generator=self.generator)
+        yield from self.sampler
+
+    def __len__(self) -> int:
+        return len(self.sampler)
+
+
 def make_loader(
-    dataset: SegmentationDataset, batch_size: int, workers: int, seed: int, *, shuffle: bool
+    dataset: SegmentationDataset,
+    batch_size: int,
+    workers: int,
+    seed: int,
+    *,
+    shuffle: bool,
+    persistent_workers: bool = False,
+    prefetch_factor: int = 2,
 ) -> DataLoader:
-    """Use explicit shuffling state, no dropped samples and no persistent stale-epoch workers."""
+    """Preserve all samples and epoch transforms, including across persistent spawn workers."""
+    if workers < 0 or (persistent_workers and workers == 0) or prefetch_factor < 1:
+        raise ValueError("Invalid workers, persistence or prefetch settings")
+    if persistent_workers:
+        dataset.share_epoch()
     generator = torch.Generator().manual_seed(seed)
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        sampler=ReplaySampler(dataset, seed) if shuffle else None,
         num_workers=workers,
         collate_fn=collate_samples,
         worker_init_fn=seed_worker,
         generator=generator,
-        persistent_workers=False,
+        persistent_workers=persistent_workers,
         pin_memory=False,
         drop_last=False,
+        **(
+            {"multiprocessing_context": "spawn", "prefetch_factor": prefetch_factor}
+            if workers
+            else {}
+        ),
     )

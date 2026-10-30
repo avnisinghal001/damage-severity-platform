@@ -39,7 +39,8 @@ duplicate/source evidence, reproducible grouped splits, and a verified frozen re
 Start with its quality report before using any split. Technical consistency passes,
 but expert annotation correctness and all physical source identities remain unresolved.
 
-[Task 03](learning/task_03.md) adds the PyTorch segmentation workflow. Data checks and
-resize/metric tests run with existing packages; PyTorch execution is currently blocked
-by the missing dependency. Install only when permitted, start with the synthetic smoke
-and tiny overfit checks, and reserve the explicit final-test command until decisions are frozen.
+[Task 03](learning/task_03.md) adds the PyTorch segmentation workflow. Its initial
+implementation lacked PyTorch; the baseline was later trained and its final test used.
+[Task 04](learning/task_04.md) now verifies that baseline on validation, plans manual
+improvements, and measures image-space damage regions. It excludes the already-used
+test from model selection and does not invent structural severity or safety scores.

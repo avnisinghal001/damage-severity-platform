@@ -1,0 +1,59 @@
+# All paths resolve relative to this file. Prior-task inputs are read-only.
+task03_config = "task03.toml"
+baseline_checkpoint = "../outputs/task03/experiments/unet_001/best.pt"
+baseline_sha256 = "1bdf5c752c646f2468de9d270eccbc863ad53c6197cc54373d7dac10b241c41d"
+baseline_validation = "../outputs/task03/evaluations/1bdf5c752c646f24/validation/metrics.json"
+output_dir = "../outputs/task04"
+device = "cpu" # Strict deterministic CPU default; MPS policy is documented before manual training
+deterministic = true
+cpu_threads = 4
+num_workers = 0 # Measured loader sweeps determine whether workers help on this host
+comparison_samples = 4
+
+[performance]
+persistent_workers = false # Requires num_workers > 0; epoch updates are shared safely
+cache_mb = 0 # MiB per dataset per process; seal hashes are checked even on cache hits
+prefetch_factor = 2 # Only passed when num_workers > 0
+channels_last = false # Opt-in after a hardware benchmark; tensor shapes remain NCHW
+plot_every = 5 # History and last checkpoint still saved every epoch; plot at final/early stop
+
+[schedule]
+epochs = 50
+batch_size = 4 # Changing this changes optimization dynamics; use the same value for a whole cohort
+validation_every = 1 # First/final always run; patience counts actual validation checks
+
+[verification]
+metric_absolute_tolerance = 0.00001
+confusion_l1_half_fraction_tolerance = 0.00001
+
+[regions]
+connectivity = 8
+minimum_reported_pixels = 1 # Reporting filter only; class totals always include every pixel
+
+[uncertainty]
+maximum_softmax_below = 0.60
+normalized_entropy_above = 0.65
+# Review heuristics, not calibrated probabilities or severity thresholds.
+
+[supervision]
+minimum_training_groups = 30
+minimum_validation_groups = 10
+# Exploratory planning gates, not formal statistical power or safety criteria.
+
+[comparison]
+bootstrap_repeats = 200
+bootstrap_seed = 123
+
+[[experiments]]
+name = "control"
+hypothesis = "Matched replay of saved baseline settings on the current backend; separates backend/run variation."
+
+[[experiments]]
+name = "capped_weights"
+max_class_weight = 1.0
+hypothesis = "Cap large rare-pixel CE weights at 1.0 to reduce minor-spalling false positives while retaining relative weighting; rare-class recall may worsen."
+
+[[experiments]]
+name = "resolution_384"
+image_size = [384, 384]
+hypothesis = "Test whether finer spatial features improve crack and region boundaries; nominal pixel compute rises 2.25x."
