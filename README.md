@@ -16,6 +16,7 @@ workflow. See [Task 03 commands](#task-03-semantic-segmentation) and the complet
 had no PyTorch runtime; a baseline was subsequently trained and its final test executed.
 **That used test is excluded from Task 04 selection and iterative comparisons.**
 Task 04 adds [controlled improvements and scoped region analytics](#task-04-improvements-and-damage-analytics).
+Task 05 adds [FastAPI model serving and PostgreSQL persistence](#task-05-fastapi-backend).
 
 The [RC1841 source](https://data.mendeley.com/datasets/yfhwfcrfmk/1)
 (DOI: `10.17632/yfhwfcrfmk.1`) describes damage segmentation.
@@ -793,3 +794,93 @@ native validation pixels**. Original checkpoints, control artifacts, model archi
 paired transforms and dataset seal were verified unchanged. Actual timing tables are in
 `outputs/task04/performance/measured_summary/`; this work establishes execution speed,
 not a learned-model accuracy improvement.
+
+## Task 05: FastAPI backend
+
+`api/` adds resident-model inference, native-resolution Task 04 analytics, private PNG
+artifacts and transactional PostgreSQL metadata. Model loading happens once per worker;
+requests never train or modify weights. A checkpoint and its SHA-256 pin are required.
+Serving needs the checkpoint, not the raw/curated datasets. This API performs no test-set
+evaluation. CPU is default; set `DAMAGE_API_DEVICE=mps` for optional MPS inference.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /inspections` | Exactly one JPEG/PNG multipart field named `file`; returns result and UUID |
+| `GET /inspections/{id}` | Persisted result, without repeating inference |
+| `GET /inspections/{id}/artifacts/image` | Oriented RGB input as PNG |
+| `GET /inspections/{id}/artifacts/mask` | Aligned L-mode PNG with class IDs 0–8 |
+| `GET /models/current` | Pinned checkpoint, release provenance, preprocessing and class mapping |
+| `GET /health` / `GET /ready` | Process liveness / loaded model and migrated database readiness |
+
+Results retain area percentages, bounding boxes, regions, mixed-category dispositions
+and **uncalibrated** score summaries. They never provide a structural safety score.
+RGB/grayscale input is accepted; grayscale is replicated to RGB, EXIF orientation is
+applied, and embedded metadata is stripped from stored derivatives. Alpha, palette,
+CMYK, animation, malformed content and excessive dimensions/bytes are rejected.
+
+Commands below are **manual only**; installation, PostgreSQL startup, migration and
+server startup were not executed during implementation. From the repository root:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e '.[backend,training,dev]'
+
+# With PostgreSQL already running, as your configured local database administrator:
+createuser --pwprompt damage_app
+createdb --owner=damage_app damage_analytics
+
+# Substitute the password entered above, URL-encoding special characters.
+export DAMAGE_API_DATABASE_URL='postgresql://damage_app:YOUR_URL_ENCODED_PASSWORD@localhost:5432/damage_analytics'
+export DAMAGE_API_CHECKPOINT='outputs/task04/experiments/control_s42/best.pt'
+export DAMAGE_API_CHECKPOINT_SHA256="$(shasum -a 256 "$DAMAGE_API_CHECKPOINT" | cut -d ' ' -f 1)"
+
+psql "$DAMAGE_API_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_initial.sql
+python -m pytest -q tests/test_api_core.py tests/test_api_http.py
+python -m ruff check src/damage_analytics/api tests/test_api_*.py
+
+python -m uvicorn damage_analytics.api.app:create_app --factory \
+  --host 127.0.0.1 --port 8000 --workers 1 --limit-concurrency 16
+```
+
+In another terminal, using an existing image and the UUID returned by the POST:
+
+```bash
+curl --fail-with-body http://127.0.0.1:8000/ready
+curl --fail-with-body -F 'file=@your_image.jpg;type=image/jpeg' http://127.0.0.1:8000/inspections
+curl --fail-with-body http://127.0.0.1:8000/inspections/INSPECTION_UUID
+curl --fail-with-body http://127.0.0.1:8000/models/current
+```
+
+Interactive endpoint schemas are at `/docs`. Bind locally: authentication is outside
+this task. Start with one worker, especially on MPS; each worker owns a model copy.
+
+| Environment variable | Default / purpose |
+| --- | --- |
+| `DAMAGE_API_DATABASE_URL` | Required PostgreSQL URL; never logged |
+| `DAMAGE_API_CHECKPOINT_SHA256` | Required full lowercase SHA-256 pin |
+| `DAMAGE_API_CHECKPOINT` | `outputs/task04/experiments/control_s42/best.pt` |
+| `DAMAGE_API_STORAGE_DIR` | `outputs/task05/inspections` |
+| `DAMAGE_API_DEVICE` / `DAMAGE_API_CPU_THREADS` | `cpu` / `2`; optional device `mps` |
+| `DAMAGE_API_MAX_UPLOAD_BYTES` | `10485760`; multipart envelope also bounded |
+| `DAMAGE_API_MAX_PIXELS` / `DAMAGE_API_MAX_DIMENSION` | `4000000` / `8192` |
+| `DAMAGE_API_UPLOAD_TIMEOUT_SECONDS` | `30` |
+| `DAMAGE_API_DATABASE_TIMEOUT_SECONDS` | `3` connection timeout; SQL timeout is 5 seconds |
+
+Apply numbered SQL files explicitly and in order; startup never migrates. Migration 001
+creates `inspections`, `predictions` and `damage_schema_migrations`; reapplication fails.
+The database stores metadata/JSON only. Back up it **and** the artifact directory together.
+Inference and IO run off the async event loop. Each worker admits one prediction at a
+time and rejects concurrent uploads with 503/`Retry-After`. Errors contain request IDs;
+logs are JSON and omit upload contents, filenames and database exception text.
+
+Files are published before the SQL transaction. If a commit acknowledgement is lost,
+files are retained to avoid breaking a potentially committed inspection. Reconcile
+unreferenced UUID directories against the database using the logged inspection ID;
+do not blindly delete them. Missing/tampered artifacts return a controlled error.
+
+For the optional live database test, first provision a **separate disposable database**,
+apply migration 001 manually there, then set `DAMAGE_TEST_DATABASE_URL` to its URL and
+run `python -m pytest -q tests/test_api_postgres.py`. That test never runs migrations.
+Implementation verification passed 18 focused tests; HTTP and PostgreSQL modules were
+skipped because their dependencies are absent. Those integrations and MPS serving
+remain unverified until dependencies and services are available.

@@ -327,3 +327,36 @@ misrepresented as a matched reference for a new MPS cohort.
 
 See [the performance lesson](learning/task_04_performance.md) for measured timings,
 memory caveats, benchmark commands and the manual pilot/full-experiment workflow.
+
+### Task 05: HTTP serving and persistence
+
+```text
+multipart upload → admission/body limits → validated oriented RGB
+  → resident checkpoint → shared Task 03 transforms + Task 04 analytics
+  → staged PNG directory → PostgreSQL inspection/prediction transaction
+  → structured response with database-backed artifact URLs
+```
+
+`api/app.py` owns the factory, lifespan and error handlers. `routes.py` and `schemas.py`
+define the HTTP contract. `config.py` reads environment settings and protects earlier
+task/source paths. `middleware.py` bounds request bodies before multipart parsing,
+rejects concurrent prediction requests, and correlates logs/errors with request IDs.
+`uploads.py` verifies image bytes, dimensions, modes and EXIF orientation.
+
+`inference.py` loads the pinned checkpoint once per worker and reuses existing geometry,
+class mappings, score restoration and region analytics. It does not load dataset pixels,
+train, evaluate the held-out test, or change weights. `service.py` runs decoding,
+inference, artifact publication and persistence in the thread pool, serializing each
+resident model. Health and retrieval do not wait for the inference lock.
+
+`storage.py` publishes complete image/ID-mask PNG directories under generated UUIDs.
+Artifact reads check database keys, containment and hashes. `repository.py` uses bound
+SQL parameters and a single transaction for both metadata tables, with short-lived
+connections. `migrations/001_initial.sql` is an explicitly applied versioned migration;
+neither application startup nor tests apply it automatically. No ORM/pool is needed
+for this initial single-inference-per-worker service.
+
+Filesystem publication and PostgreSQL commit are not one distributed transaction.
+An ambiguous database failure retains artifacts for operator reconciliation rather
+than risking deletion of a committed inspection's files. See the brief
+[API setup and execution commands](../README.md#task-05-fastapi-backend).
