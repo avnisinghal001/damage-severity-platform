@@ -1,0 +1,35 @@
+# Paths resolve relative to this configuration file. No existing releases are modified.
+sdnet2018_archive = "../data/external/sdnet2018/SDNET2018.zip"
+damsegment_archive = "../data/external/damsegment/DamSegment.zip"
+output_dir = "../outputs/task07"
+seed = 42
+fractions = [0.70, 0.15, 0.15]
+source_groups_csv = "" # Optional: sample_id,source_group,evidence; never inferred as verified
+near_reviews_csv = "" # Optional: left,right,decision,evidence (same_source/different_source)
+phash_distance = 4
+max_near_candidates = 100000
+max_image_pixels = 32000000
+mask_min_polygon_iou = 0.5 # Explicit QA heuristic; disagreements/exclusions remain reviewable
+
+[damsegment]
+# Numeric/source-color correspondence is checked against paired JSON during preparation.
+# Semantic names are NOT supplied in the actual nested archives.
+category_names = ["source_category_0", "source_category_1"]
+semantic_names_verified = false
+semantic_evidence = ""
+
+[training]
+epochs = 30
+batch_size = 32
+learning_rate = 0.0003
+weight_decay = 0.0001
+patience = 6
+min_delta = 0.0001
+scheduler = "cosine" # cosine or none
+class_weighting = "balanced" # Training labels only; none is also supported
+threshold_objective = "balanced_accuracy" # or macro_f1; validation only
+image_size = 224
+device = "auto" # cpu/mps/auto; no hidden runtime fallback
+deterministic = false # MPS may reject deterministic kernels; explicit recorded policy
+cpu_threads = 4
+num_workers = 0

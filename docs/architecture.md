@@ -360,3 +360,23 @@ Filesystem publication and PostgreSQL commit are not one distributed transaction
 An ambiguous database failure retains artifacts for operator reconciliation rather
 than risking deletion of a committed inspection's files. See the brief
 [API setup and execution commands](../README.md#task-05-fastapi-backend).
+
+### Task 07: isolated external-dataset research
+
+`task07/archives.py` reuses the existing ZIP protection; adapters discover SDNET2018 and
+DamSegment's actual nested layouts. Annotation validation, staged preparation, duplicate
+components and group balancing publish sealed, immutable releases under `outputs/task07/`.
+Native DamSegment source IDs are retained separately from the RC nine-class taxonomy.
+Source buckets are explicitly provisional until documentary identity evidence is supplied.
+
+The focused classification pipeline reuses runtime seeding, selection state, replay
+sampling and provenance utilities. ImageNet normalization/full-patch augmentation feeds
+MobileNetV3-Small or ResNet18; training alone may request pretrained weights. Best validation
+ROC-AUC selects the checkpoint, then validation chooses one frozen decision threshold.
+Evaluation/compare are separate commands; final-test requires verified release quality.
+Generic confusion metrics also support native three-class mask evaluation, while detection
+has annotation QA/gallery only. Task 07 checkpoint formats are separate from serving U-Net
+checkpoints; no API, persistence or frontend integration is introduced.
+
+See [Task 07 modules, safeguards and commands](task07.md). Tests and the synthetic CPU smoke
+exercise plumbing, not real classifier accuracy or MPS/backbone performance.

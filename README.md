@@ -884,3 +884,18 @@ run `python -m pytest -q tests/test_api_postgres.py`. That test never runs migra
 Implementation verification passed 18 focused tests; HTTP and PostgreSQL modules were
 skipped because their dependencies are absent. Those integrations and MPS serving
 remain unverified until dependencies and services are available.
+
+## Task 07: external dataset QA and crack classification
+
+Task 07 adds safe SDNET2018/DamSegment preparation, provenance-pinned grouped splits,
+duplicate review, MobileNetV3-Small/ResNet18 transfer learning, validation-only threshold
+selection and native DamSegment mask evaluation. It leaves the existing serving system
+unchanged. Crack-negative does not mean undamaged; these classifiers are not OOD or
+structural-severity estimators.
+
+Start with [the Task 07 workflow and exact commands](docs/task07.md) and the generated
+`outputs/task07/audit_report.md`. Real extraction/training remain manual. Source grouping
+is provisional until authenticated; final testing is blocked on unresolved quality checks.
+DamSegment annotation category names are undocumented in the local archives and retain
+neutral numeric names. Install the declared `classification` extra locally before real
+backbone runs; no packages or weights were downloaded during implementation.
