@@ -899,3 +899,27 @@ is provisional until authenticated; final testing is blocked on unresolved quali
 DamSegment annotation category names are undocumented in the local archives and retain
 neutral numeric names. Install the declared `classification` extra locally before real
 backbone runs; no packages or weights were downloaded during implementation.
+
+## Task 08: crack classification reliability
+
+Task 08 investigates grouped splits and mixed-view near duplicates, reproduces saved
+validation metrics, and generates indexed FP/FN/borderline/disagreement galleries,
+ROC/PR curves, material breakdowns and source-only threshold sensitivity. Search telemetry
+now distinguishes distance evaluations from candidate hits. Test images are redacted.
+
+[Task 08 findings, modules and exact Mac commands](docs/task08.md) cover matched 25-epoch
+MobileNet/ResNet runs, early stopping, optional orientation ablations and runtime reports.
+The five-epoch baselines and all frozen releases remain unchanged. No real training was
+launched during implementation; model improvement remains an experiment to measure.
+
+## Task 09: segmentation evaluation and native damage features
+
+Task 09 authenticates/re-scores RC1841 validation masks, audits polygon decoding and
+class imbalance, and adds native-coordinate region geometry with separate reporting
+filters. A load-once pipeline returns validated feature JSON, raw/filtered masks and
+uncalibrated uncertainty summaries. Existing serving behavior is unchanged.
+
+See [Task 09 evidence, modules and exact commands](docs/task09.md) for the matched U-Net
+versus pretrained LR-ASPP experiment. Real training and MPS evaluation remain manual
+and should wait for Task 08 to finish. Cached validation replay and focused CPU checks
+do not use final-test data or invent structural severity targets.

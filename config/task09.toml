@@ -1,0 +1,54 @@
+# Isolated from the running Task 08 job. CPU is the safe default for all Task 09 commands.
+source_config = "task03.toml"
+output_dir = "../outputs/task09"
+seed = 42
+device = "cpu"
+cpu_threads = 1
+audit_training_samples = 24
+gallery_samples_per_class = 2
+maximum_image_pixels = 32000000
+freeze_pretrained_batch_norm = true
+
+[data]
+# Common normalization for BOTH new matched models; old checkpoints use saved settings.
+image_size = [256, 256]
+mean = [0.485, 0.456, 0.406]
+std = [0.229, 0.224, 0.225]
+horizontal_flip = 0.5
+vertical_flip = 0.0
+crop_probability = 0.5
+crop_size = [512, 512]
+foreground_crop_probability = 0.8
+
+[optimization]
+epochs = 25
+batch_size = 4
+learning_rate = 0.0003
+weight_decay = 0.0001
+dice_weight = 0.5
+class_weighting = "inverse_sqrt"
+max_class_weight = 10.0
+patience = 8
+min_delta = 0.0001
+gradient_clip = 1.0
+validation_every = 1
+
+[features]
+connectivity = 8
+minimum_region_pixels = 1 # Default: no removal. Reporting heuristic, not verified artifacts.
+maximum_reported_regions = 1000
+minimum_by_class = {} # Optional string class IDs 1..8 -> minimum native pixels
+maximum_softmax_below = 0.60
+normalized_entropy_above = 0.65
+
+[[baselines]]
+name = "unet_001"
+checkpoint = "../outputs/task03/experiments/unet_001/best.pt"
+sha256 = "1bdf5c752c646f2468de9d270eccbc863ad53c6197cc54373d7dac10b241c41d"
+validation = "../outputs/task04/baseline_audit/validation"
+
+[[baselines]]
+name = "control_s42"
+checkpoint = "../outputs/task04/experiments/control_s42/best.pt"
+sha256 = "e34c03e8c5d2025715526101e14853a4490d492126d96e939c3a134d5ca2f651"
+validation = "../outputs/task04/evaluations/e34c03e8c5d20257/validation"

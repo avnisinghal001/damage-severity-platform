@@ -11,10 +11,11 @@ from damage_analytics.io import sha256_file, write_csv, write_json
 from damage_analytics.task07 import checkpoints
 from damage_analytics.task07.config import TrainConfig
 from damage_analytics.task07.crosscheck import overlap
+from damage_analytics.task07.data import validate_preprocessing
 from damage_analytics.task07.loops import loader_for, pass_epoch, prediction_rows
 from damage_analytics.task07.metrics import classification_metrics
 from damage_analytics.task07.plots import confusion
-from damage_analytics.task07.release import Release, open_release
+from damage_analytics.task07.release import Release, open_release, validate_development_ids
 from damage_analytics.training.experiments import execution_provenance
 from damage_analytics.training.runtime import configure_runtime
 
@@ -64,6 +65,7 @@ def evaluate(
     rows = release.samples(split, final_test=final_test)
     if not rows:
         raise ValueError("No classification samples in requested split")
+    validate_development_ids(payload, source)
     if external:
         if not confirm_compatible_labels:
             raise ValueError(
@@ -92,6 +94,7 @@ def evaluate(
             raise ValueError(
                 "Cross-dataset overlap candidates require resolution/quarantine before evaluation"
             )
+    validate_preprocessing(payload)
     model, payload = checkpoints.load(checkpoint, device, payload)
     folder = (
         output
@@ -118,6 +121,7 @@ def evaluate(
             {
                 "metrics": metrics,
                 "loss": result["loss"],
+                "runtime": result["runtime"],
                 "dataset": release.identity(),
                 "source_dataset": source.identity(),
                 "split": split,

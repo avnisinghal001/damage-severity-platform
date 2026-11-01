@@ -380,3 +380,35 @@ checkpoints; no API, persistence or frontend integration is introduced.
 
 See [Task 07 modules, safeguards and commands](task07.md). Tests and the synthetic CPU smoke
 exercise plumbing, not real classifier accuracy or MPS/backbone performance.
+
+### Task 08: validation reliability and matched training
+
+`task08/` authenticates the pinned Task 07 release seals, checkpoints and complete saved
+validation prediction populations before recomputing metrics. `integrity.py` enumerates
+cross-view candidates and verifies indexed search against brute force. `galleries.py`
+enforces test-pixel redaction; `diagnostics.py` restricts threshold sensitivity to SDNET
+source validation. `analysis.py` publishes indexed errors, disagreements, curves and
+material diagnostics, while `comparison.py` enforces matched source settings and seeds.
+
+Training reuses the Task 07 engine with backward-compatible optional right-angle
+augmentation, checkpoint preprocessing checks and synchronized pass timing. The Task 08
+config pins existing releases and declares a matched 25-epoch ceiling with patience eight.
+Serving/inference API behavior and segmentation/severity systems are unaffected.
+The [Task 08 workflow](task08.md) separates executed validation analysis from manual
+training and later external assessment; no Task 08 command exposes final-test evaluation.
+
+### Task 09: isolated segmentation research and native geometry
+
+`task09/audit.py` checks sealed RC1841 metadata and development polygon/mask consistency.
+`evaluation.py` authenticates saved native validation masks or runs explicit fresh
+validation for either architecture, with the same argmax/unpad/nearest protocol.
+`models.py` wraps TorchVision LR-ASPP and the existing U-Net; `experiments.py` reuses
+the original dataset, loss, epoch and selection utilities without editing shared code.
+Task 09 checkpoints are separate from existing serving formats.
+
+`pipeline.py` owns one loaded model and restores masks/score maps to the EXIF-oriented
+original frame. `features.py` reuses exact RLE components; `geometry.py` adds pixel-edge
+perimeter and moment descriptors. `schema.py` validates JSON labels, coordinates, finite
+values and pixel/region conservation. Raw coverage stays separate from configurable
+reporting filters and table truncation. No physical scale or structural severity is inferred.
+See the [Task 09 workflow](task09.md); its default CPU execution is isolated from Task 08.

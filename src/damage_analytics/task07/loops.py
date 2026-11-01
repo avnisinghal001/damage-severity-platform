@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from damage_analytics.task07.config import TrainConfig
 from damage_analytics.task07.data import CrackDataset, make_loader
 from damage_analytics.task07.release import Release
+from damage_analytics.task07.timing import timestamp
 
 
 def pass_epoch(
@@ -19,8 +20,11 @@ def pass_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
 ) -> dict:
+    if criterion.reduction != "sum":
+        raise ValueError("Classifier pass requires sum-reduction CE; normalization is explicit")
     training = optimizer is not None
     model.train(training)
+    started, samples = timestamp(device), 0
     numerator, denominator, targets, scores, ids = 0.0, 0.0, [], [], []
     with torch.enable_grad() if training else torch.inference_mode():
         for images, labels, sample_ids in loader:
@@ -29,7 +33,11 @@ def pass_epoch(
                 optimizer.zero_grad(set_to_none=True)
             logits = model(images)
             summed = criterion(logits, labels)
-            mass = criterion.weight[labels].sum()
+            mass = (
+                criterion.weight[labels].sum()
+                if criterion.weight is not None
+                else labels.new_tensor(labels.numel(), dtype=torch.float32)
+            )
             loss = summed / mass
             value = float(loss.detach().cpu())
             if not math.isfinite(value):
@@ -41,6 +49,7 @@ def pass_epoch(
             weight = float(mass.cpu())
             numerator += value * weight
             denominator += weight
+            samples += labels.numel()
             if not training:
                 probability = logits.softmax(1)[:, 1].cpu().numpy()
                 if not np.isfinite(probability).all():
@@ -50,11 +59,19 @@ def pass_epoch(
                 ids.extend(sample_ids)
     if denominator == 0:
         raise ValueError("Empty classification loader")
+    elapsed = timestamp(device) - started
     return {
         "loss": numerator / denominator,
         "targets": targets,
         "probabilities": scores,
         "ids": ids,
+        "runtime": {
+            "seconds": elapsed,
+            "samples": samples,
+            "images_per_second": samples / elapsed,
+            "scope": "End-to-end pass: loading, hash checks, decode, transfer, compute; "
+            "training includes backward/optimizer. MPS synchronized at boundaries.",
+        },
     }
 
 
@@ -66,7 +83,13 @@ def loader_for(
     training: bool = False,
 ) -> DataLoader:
     dataset = CrackDataset(
-        release, rows, settings.image_size, training, seed, settings.num_workers
+        release,
+        rows,
+        settings.image_size,
+        training,
+        seed,
+        settings.num_workers,
+        settings.augmentation,
     )
     return make_loader(dataset, settings.batch_size, settings.num_workers, seed, shuffle=training)
 

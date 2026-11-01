@@ -31,12 +31,21 @@ class HammingTree:
                 current = children[distance]
         self.nodes[value] = ([identifier], {})
 
-    def query(self, value: int, radius: int):
+    def query(self, value: int, radius: int, *, stats: dict | None = None):
+        """Yield radius hits; optionally count search work even when no candidate is found."""
+        if stats is not None:
+            stats["queries"] = stats.get("queries", 0) + 1
         stack = [] if self.root is None else [self.root]
         while stack:
             current = stack.pop()
             distance = (value ^ current).bit_count()
+            if stats is not None:
+                stats["node_distance_evaluations"] = stats.get("node_distance_evaluations", 0) + 1
             if distance <= radius:
+                if stats is not None:
+                    stats["radius_hits"] = stats.get("radius_hits", 0) + len(
+                        self.nodes[current][0]
+                    )
                 yield from self.nodes[current][0]
             stack.extend(
                 child
@@ -62,8 +71,9 @@ def evidence_groups(
                 {"left": members[0], "right": value, "kind": field} for value in members[1:]
             )
     tree, truncated, comparisons = HammingTree(), False, 0
+    search = {"queries": 0, "node_distance_evaluations": 0, "radius_hits": 0}
     for row in sorted(records, key=lambda r: r["sample_id"]):
-        for identifier in () if truncated else tree.query(row["phash"], radius):
+        for identifier in () if truncated else tree.query(row["phash"], radius, stats=search):
             comparisons += 1
             if comparisons > limit * 20:
                 truncated = True
@@ -118,6 +128,8 @@ def evidence_groups(
             "edges": edges,
             "screening_truncated": truncated,
             "screened_comparisons": comparisons,
+            "screened_comparisons_definition": "Legacy count of pHash radius hits consumed",
+            "phash_search": search,
             "scope": "Leakage components, not invented physical-source identifiers",
         },
     )

@@ -1,0 +1,31 @@
+# Paths resolve relative to this file. Existing releases/checkpoints remain immutable.
+output_dir = "../outputs/task08"
+sdnet_release = "../outputs/task07/releases/sdnet2018-a52402f4884726cc"
+sdnet_seal_sha256 = "80ab70d2b38c36660dbbcf1d0bfb483f2a9eeb4388ae30a403359d66f95f01f5"
+damsegment_release = "../outputs/task07/releases/damsegment-2cb733faf99d0f71"
+damsegment_seal_sha256 = "6beab19a46e06f2abcb5f3242c5644bd43b016fd185d3b002e1fb13e32b0c368"
+baseline_runs = ["../outputs/task07/experiments/sdnet_mobile_pilot", "../outputs/task07/experiments/sdnet_resnet_pilot"]
+seed = 42
+phash_distance = 4
+max_near_candidates = 100000
+brute_force_queries = 12
+gallery_samples = 12
+pairs_per_page = 6
+
+[training]
+# Matched initial experiment: longer budget/schedule; preserve baseline preprocessing/loss.
+epochs = 25
+batch_size = 32
+learning_rate = 0.0003
+weight_decay = 0.0001
+patience = 8
+min_delta = 0.0001
+scheduler = "cosine"
+class_weighting = "balanced"
+threshold_objective = "balanced_accuracy"
+image_size = 224
+device = "auto"
+deterministic = false
+cpu_threads = 4
+num_workers = 0
+augmentation = "baseline" # orientation = optional matched right-angle rotation ablation

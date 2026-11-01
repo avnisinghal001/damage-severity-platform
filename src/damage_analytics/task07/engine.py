@@ -4,6 +4,7 @@ import importlib.metadata
 import re
 from dataclasses import asdict
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import torch
@@ -99,6 +100,7 @@ def train(
     train_loader = loader_for(release, train_rows, settings, seed, True)
     validation_loader = loader_for(release, validation_rows, settings, seed)
     state, history = SelectionState(), []
+    started = perf_counter()
     try:
         for epoch in range(1, settings.epochs + 1):
             train_loader.dataset.set_epoch(epoch)
@@ -117,6 +119,15 @@ def train(
                     "validation_roc_auc": score,
                     "validation_accuracy_at_0_5": metrics["accuracy"],
                     "validation_macro_f1_at_0_5": metrics["macro_f1"],
+                    "validation_balanced_accuracy_at_0_5": metrics["balanced_accuracy"],
+                    "validation_crack_precision_at_0_5": metrics["classes"][1]["precision"],
+                    "validation_crack_recall_at_0_5": metrics["classes"][1]["recall"],
+                    "validation_crack_f1_at_0_5": metrics["classes"][1]["f1"],
+                    "validation_pr_auc": metrics["pr_auc"],
+                    "train_seconds": trained["runtime"]["seconds"],
+                    "validation_seconds": validated["runtime"]["seconds"],
+                    "train_images_per_second": trained["runtime"]["images_per_second"],
+                    "validation_images_per_second": validated["runtime"]["images_per_second"],
                     "learning_rate": optimizer.param_groups[0]["lr"],
                 }
             )
@@ -158,6 +169,19 @@ def train(
         )
         write_json(folder / "validation_metrics.json", selected_metrics)
         curves(folder, history)
+        write_json(
+            folder / "runtime.json",
+            {
+                "run_wall_seconds": perf_counter() - started,
+                "train_pass_seconds": sum(r["train_seconds"] for r in history),
+                "validation_pass_seconds": sum(r["validation_seconds"] for r in history),
+                "selected_validation_pass": validation["runtime"],
+                "device": str(device),
+                "epochs_executed": len(history),
+                "scope": "Run wall time includes epoch checkpointing, thresholding and plots; "
+                "excludes model initialization/weight download. Not model-only latency.",
+            },
+        )
         write_json(
             folder / "status.json",
             {

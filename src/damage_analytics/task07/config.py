@@ -22,6 +22,7 @@ class TrainConfig:
     deterministic: bool = False
     cpu_threads: int = 4
     num_workers: int = 0
+    augmentation: str = "baseline"
 
 
 @dataclass(frozen=True)
@@ -123,3 +124,5 @@ def validate_training(config: TrainConfig) -> None:
         "macro_f1",
     ):
         raise ValueError("Invalid weighting/threshold objective")
+    if config.augmentation not in ("baseline", "orientation"):
+        raise ValueError("Augmentation must be baseline or orientation")

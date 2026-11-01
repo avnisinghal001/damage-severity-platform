@@ -20,6 +20,8 @@ def overlap(
             hashes.setdefault(row[field], []).append(row["sample_id"])
         tree.add(row["phash"], row["sample_id"])
     exact, near, truncated, comparisons, exact_count = [], [], False, 0, 0
+    search = {"queries": 0, "node_distance_evaluations": 0, "radius_hits": 0}
+    dhash_comparisons = 0
     for row in right:
         hits = set(hashes.get(row["image_sha256"], []) + hashes.get(row["decoded_sha256"], []))
         exact_count += len(hits)
@@ -27,13 +29,14 @@ def overlap(
             {"left": identifier, "right": row["sample_id"]}
             for identifier in sorted(hits)[: max(0, limit - len(exact))]
         )
-        for identifier in () if truncated else tree.query(row["phash"], radius):
+        for identifier in () if truncated else tree.query(row["phash"], radius, stats=search):
             comparisons += 1
             if comparisons > limit * 20:
                 truncated = True
                 break
             if identifier in hits:
                 continue
+            dhash_comparisons += 1
             if (row["dhash"] ^ indexed[identifier]["dhash"]).bit_count() <= 6:
                 if len(near) < limit:
                     near.append(
@@ -51,8 +54,18 @@ def overlap(
         "exact_pair_count": exact_count,
         "exact_pair_listing_truncated": exact_count > len(exact),
         "near_candidates": near,
+        "near_candidate_count": len(near),
         "screening_truncated": truncated,
-        "screened_comparisons": comparisons,
+        "screening_schema": 2,
+        "screened_comparisons": search["node_distance_evaluations"],
+        "screened_comparisons_definition": "BK-tree node-distance evaluations, not N*M pairs",
+        "phash_candidate_hits_consumed": comparisons,
+        "phash_search": search,
+        "dhash_comparisons": dhash_comparisons,
+        "indexed_records": len(left),
+        "target_records": len(right),
+        "queried_records": search["queries"],
+        "possible_cartesian_pairs": len(left) * len(right),
         "phash_distance": radius,
         "dhash_distance": 6,
         "candidate_limit": limit,

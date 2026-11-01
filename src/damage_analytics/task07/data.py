@@ -13,11 +13,29 @@ STD = (0.229, 0.224, 0.225)
 
 
 def prepare_image(
-    image: Image.Image, size: int, *, training: bool, rng: np.random.Generator
+    image: Image.Image,
+    size: int,
+    *,
+    training: bool,
+    rng: np.random.Generator,
+    augmentation: str = "baseline",
 ) -> np.ndarray:
     """Keep the whole patch: random cropping could remove a crack but retain its positive label."""
     image = image.convert("RGB")
+    if augmentation not in ("baseline", "orientation"):
+        raise ValueError("Unknown augmentation policy")
     if training:
+        if augmentation == "orientation":
+            # Exact right-angle rotations introduce no extra interpolation or cropping.
+            rotation = int(rng.integers(4))
+            if rotation:
+                image = image.transpose(
+                    (
+                        Image.Transpose.ROTATE_90,
+                        Image.Transpose.ROTATE_180,
+                        Image.Transpose.ROTATE_270,
+                    )[rotation - 1]
+                )
         if rng.random() < 0.5:
             image = ImageOps.mirror(image)
         image = ImageEnhance.Brightness(image).enhance(float(rng.uniform(0.9, 1.1)))
@@ -39,9 +57,11 @@ class CrackDataset(Dataset):
         training: bool,
         seed: int,
         workers: int = 0,
+        augmentation: str = "baseline",
     ) -> None:
         self.release, self.rows, self.size = release, rows, size
         self.training, self.seed = training, seed
+        self.augmentation = augmentation
         self.epoch = torch.tensor(0, dtype=torch.int64)
         if workers:
             self.epoch.share_memory_()
@@ -55,7 +75,13 @@ class CrackDataset(Dataset):
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int, str]:
         row = self.rows[index]
         rng = np.random.default_rng(np.random.SeedSequence([self.seed, int(self.epoch), index]))
-        rgb = prepare_image(self.release.image(row), self.size, training=self.training, rng=rng)
+        rgb = prepare_image(
+            self.release.image(row),
+            self.size,
+            training=self.training,
+            rng=rng,
+            augmentation=self.augmentation,
+        )
         return torch.from_numpy(rgb), int(row["label"]), row["sample_id"]
 
 
@@ -74,3 +100,10 @@ def make_loader(
         pin_memory=False,
         **({"multiprocessing_context": "spawn", "prefetch_factor": 2} if workers else {}),
     )
+
+
+def validate_preprocessing(payload: dict) -> None:
+    """Fail if saved inference assumptions differ from the implemented preprocessing."""
+    expected = {"mean": list(MEAN), "std": list(STD), "resize": "full-image letterbox, bilinear"}
+    if payload.get("normalization") != expected:
+        raise ValueError("Checkpoint preprocessing is unsupported or changed")

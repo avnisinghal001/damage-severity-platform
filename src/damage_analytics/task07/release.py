@@ -50,6 +50,20 @@ class Release:
         return result
 
 
+def validate_development_ids(payload: dict, release: Release) -> None:
+    """Prevent an incomplete checkpoint ID list from silently narrowing overlap screening."""
+    expected = {
+        r["sample_id"]
+        for r in release.rows
+        if r["task"] == "classification" and r["split"] in ("train", "validation")
+    }
+    recorded = payload.get("development_ids", [])
+    if len(recorded) != len(expected) or set(recorded) != expected:
+        raise ValueError(
+            "Checkpoint development IDs differ from frozen train/validation population"
+        )
+
+
 def open_release(root: Path, *, full: bool = False) -> Release:
     """Verify seals and partition semantics without decoding test pixels for routine use."""
     root = root.resolve()
