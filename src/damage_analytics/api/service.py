@@ -12,6 +12,7 @@ from damage_analytics.api.inference import Predictor
 from damage_analytics.api.repository import Inspection, Repository
 from damage_analytics.api.storage import ArtifactStore
 from damage_analytics.api.uploads import decode_upload
+from damage_analytics.serving.severity_client import SeverityGateway
 
 logger = logging.getLogger("damage_analytics.api")
 
@@ -25,9 +26,11 @@ class InspectionService:
         predictor: Predictor,
         repository: Repository,
         storage: ArtifactStore,
+        severity: SeverityGateway | None = None,
     ) -> None:
         self.settings, self.predictor = settings, predictor
         self.repository, self.storage = repository, storage
+        self.severity = severity
         self._gate = BoundedSemaphore(1)
 
     def database_ready(self) -> bool:
@@ -49,6 +52,7 @@ class InspectionService:
                 raise ApiError(503, "database_unavailable", "Inspection storage is not ready")
             identifier, created_at = uuid4(), datetime.now(UTC)
             prediction = self.predictor.predict(upload.image)
+            severity = self.severity.predict(upload.image) if self.severity else None
             artifacts = self.storage.publish(identifier, upload.image, prediction.mask)
             record = Inspection(
                 identifier,
@@ -64,6 +68,9 @@ class InspectionService:
                 artifacts.mask_sha256,
                 self.predictor.metadata,
                 prediction.analytics,
+                prediction.features,
+                prediction.crack,
+                severity,
             )
             try:
                 self.repository.save(record)
@@ -84,6 +91,14 @@ class InspectionService:
             return record
         finally:
             self._gate.release()
+
+    def history(self, limit: int, before: tuple | None = None) -> list[dict]:
+        try:
+            return self.repository.history(limit, before)
+        except Exception as exc:
+            raise ApiError(
+                503, "database_unavailable", "Inspection history is unavailable"
+            ) from exc
 
     def get(self, identifier: UUID) -> Inspection:
         """Fetch persisted results without rerunning inference."""

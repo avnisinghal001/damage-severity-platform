@@ -4,6 +4,14 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
+
+
+class UploadLimits(Protocol):
+    max_upload_bytes: int
+    max_pixels: int
+    max_dimension: int
+    upload_timeout_seconds: int
 
 
 @dataclass(frozen=True)
@@ -21,6 +29,11 @@ class Settings:
     max_dimension: int = 8192
     database_timeout_seconds: int = 3
     upload_timeout_seconds: int = 30
+    crack_checkpoint: Path | None = None
+    crack_checkpoint_sha256: str | None = None
+    severity_url: str | None = None
+    severity_checkpoint_sha256: str | None = None
+    severity_timeout_seconds: int = 60
 
     def __post_init__(self) -> None:
         if not self.database_url.startswith(("postgresql://", "postgres://")):
@@ -29,6 +42,33 @@ class Settings:
             raise ValueError("DAMAGE_API_CHECKPOINT_SHA256 must pin the full SHA-256")
         if self.device not in ("cpu", "mps"):
             raise ValueError("DAMAGE_API_DEVICE must be cpu or mps")
+        integration = (
+            self.crack_checkpoint,
+            self.crack_checkpoint_sha256,
+            self.severity_url,
+            self.severity_checkpoint_sha256,
+        )
+        if any(v is not None for v in integration):
+            from urllib.parse import urlsplit
+
+            if not all(integration):
+                raise ValueError(
+                    "Integrated serving needs crack checkpoint/pin and severity URL/pin"
+                )
+            for digest in (self.crack_checkpoint_sha256, self.severity_checkpoint_sha256):
+                if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise ValueError("Every deployed model needs a SHA-256 pin")
+            url = urlsplit(self.severity_url)
+            if (
+                url.scheme not in ("http", "https")
+                or not url.netloc
+                or url.username
+                or url.password
+                or url.path not in ("", "/")
+                or url.query
+                or url.fragment
+            ):
+                raise ValueError("Severity URL must be a trusted HTTP service origin")
         for value in (
             self.cpu_threads,
             self.max_upload_bytes,
@@ -36,26 +76,37 @@ class Settings:
             self.max_dimension,
             self.database_timeout_seconds,
             self.upload_timeout_seconds,
+            self.severity_timeout_seconds,
         ):
             if type(value) is not int or value < 1:
                 raise ValueError("API resource limits must be positive integers")
         root = Path(__file__).resolve().parents[3]
         storage = self.storage_dir.resolve()
-        protected = [
-            root / name
-            for name in (
-                "src",
-                "config",
-                "docs",
-                "tests",
-                "data",
-                ".git",
-                "outputs/task01",
-                "outputs/task02",
-                "outputs/task03",
-                "outputs/task04",
-            )
-        ] + [self.checkpoint.resolve()]
+        protected = (
+            [
+                root / name
+                for name in (
+                    "src",
+                    "config",
+                    "docs",
+                    "tests",
+                    "data",
+                    ".git",
+                    "outputs/task01",
+                    "outputs/task02",
+                    "outputs/task03",
+                    "outputs/task04",
+                    "outputs/task06",
+                    "outputs/task07",
+                    "outputs/task08",
+                    "outputs/task09",
+                    "outputs/task10",
+                    "outputs/task11",
+                )
+            ]
+            + [self.checkpoint.resolve()]
+            + ([self.crack_checkpoint.resolve()] if self.crack_checkpoint else [])
+        )
         if any(
             storage == path or storage in path.parents or path in storage.parents
             for path in protected
@@ -80,6 +131,12 @@ class Settings:
             ),
             "storage_dir": Path(os.getenv("DAMAGE_API_STORAGE_DIR", "outputs/task05/inspections")),
             "device": os.getenv("DAMAGE_API_DEVICE", "cpu"),
+            "crack_checkpoint": Path(os.environ["DAMAGE_API_CRACK_CHECKPOINT"])
+            if os.environ.get("DAMAGE_API_CRACK_CHECKPOINT")
+            else None,
+            "crack_checkpoint_sha256": os.getenv("DAMAGE_API_CRACK_CHECKPOINT_SHA256"),
+            "severity_url": os.getenv("DAMAGE_API_SEVERITY_URL"),
+            "severity_checkpoint_sha256": os.getenv("DAMAGE_API_SEVERITY_CHECKPOINT_SHA256"),
         }
         for name, default in (
             ("cpu_threads", 2),
@@ -88,6 +145,7 @@ class Settings:
             ("max_dimension", 8192),
             ("database_timeout_seconds", 3),
             ("upload_timeout_seconds", 30),
+            ("severity_timeout_seconds", 60),
         ):
             values[name] = int(os.getenv(f"DAMAGE_API_{name.upper()}", str(default)))
         return cls(**values)

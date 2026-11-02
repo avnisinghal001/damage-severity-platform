@@ -1,0 +1,13 @@
+# Direct serving dependencies verified in the existing Mac environment.
+# Container build/runtime still require verification on Docker; no Mac packages are changed.
+torch==2.15.0
+torchvision==0.29.2
+numpy==2.5.4
+Pillow==12.3.0
+matplotlib==3.11.2
+fastapi==0.162.0
+pydantic==2.14.2
+uvicorn==0.54.0
+python-multipart==0.0.33
+psycopg==3.3.6
+httpx==0.28.1

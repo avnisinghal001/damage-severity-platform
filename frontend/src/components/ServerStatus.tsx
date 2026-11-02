@@ -28,12 +28,13 @@ export function ServerStatus() {
 
   useEffect(() => { void refresh(); return () => controller.current?.abort(); }, [refresh]);
   const title = checking ? "Checking backend" : !readiness ? "Backend unavailable"
-    : readiness.status === "ready" ? "Backend ready" : "Backend not ready";
+    : readiness.status === "ready" ? "Backend ready"
+    : readiness.database && readiness.severity === false ? "Severity unavailable" : "Backend not ready";
   return <div className="server-status">
     <div><span className={`status-dot ${readiness?.status === "ready" && !checking ? "ready" : ""}`} aria-hidden="true" />
       <span className="status-title" role="status">{title}</span>
       <span className="server-detail">{checking ? "Connecting to FastAPI" : model
-        ? `${model.device.toUpperCase()} · epoch ${model.checkpoint_epoch}${readiness && !readiness.database ? " · database not ready" : ""}`
+        ? `${model.device.toUpperCase()} · epoch ${model.checkpoint_epoch}${readiness && !readiness.database ? " · database not ready" : ""}${readiness?.severity === false ? " · severity unavailable" : ""}`
         : "Check the API connection"}</span></div>
     <button className="text-button" type="button" onClick={() => void refresh()} disabled={checking}
       aria-label="Refresh backend readiness">Refresh</button>

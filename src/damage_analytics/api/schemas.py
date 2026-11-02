@@ -1,10 +1,31 @@
-"""HTTP contracts around the preserved Task 04 analytics document."""
+"""Inspection, history and model contracts with separate crack/Phi-Net results."""
 
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from damage_analytics.serving.contracts import (
+    CrackPrediction,
+    SeverityPrediction,
+    SeverityUnavailable,
+)
+
+IMAGE_UPLOAD_OPENAPI = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["file"],
+                    "properties": {"file": {"type": "string", "format": "binary"}},
+                }
+            }
+        },
+    }
+}
 
 
 class ClassMapping(BaseModel):
@@ -53,13 +74,32 @@ class InspectionResponse(BaseModel):
     mask: ArtifactReference
     detected_classes: list[DetectedClass]
     model: ModelMetadata
-    analytics: dict[str, Any]  # Task 04 schema: full regions, complexes and uncertainty retained.
+    analytics: dict[str, Any]  # Legacy/dashboard pixel view; Task 09 features stay separate.
+    features: dict[str, Any] | None = None  # Validated Task 09 native-resolution report.
+    classification: CrackPrediction | None = None
+    severity: SeverityPrediction | SeverityUnavailable | None = None
+
+
+class HistoryItem(BaseModel):
+    id: UUID
+    created_at: datetime
+    width: int
+    height: int
+    classification: CrackPrediction | None = None
+    severity: SeverityPrediction | SeverityUnavailable | None = None
+
+
+class HistoryPage(BaseModel):
+    items: list[HistoryItem]
+    next_before: datetime | None = None
+    next_before_id: UUID | None = None
 
 
 class Readiness(BaseModel):
     status: Literal["ready", "not_ready"]
     model: bool
     database: bool
+    severity: bool | None = None
 
 
 class ErrorDetail(BaseModel):

@@ -4,6 +4,8 @@ import { AnalyticsPanel } from "./components/AnalyticsPanel";
 import { InputPanel } from "./components/InputPanel";
 import { SegmentationViewer } from "./components/SegmentationViewer";
 import { ServerStatus } from "./components/ServerStatus";
+import { ClassifierResults } from "./components/ClassifierResults";
+import { HistoryPanel } from "./components/HistoryPanel";
 import type { Inspection } from "./types";
 
 type Operation = "predict" | "retrieve";
@@ -24,9 +26,9 @@ export default function App() {
     return () => { mounted.current = false; controller.current?.abort(); };
   }, []);
 
-  async function run(operation: Operation) {
+  async function run(operation: Operation, savedId?: string) {
     if (active.current) return;
-    const id = query.trim();
+    const id = savedId || query.trim();
     if (operation === "retrieve" && !UUID_PATTERN.test(id)) {
       setError("Enter a complete inspection UUID, including its hyphens.");
       return;
@@ -71,10 +73,12 @@ export default function App() {
       <div className="page-heading"><div><p className="eyebrow">Research & inspection workspace</p>
         <h1>Concrete damage, in focus.</h1>
         <p className="muted">Explore segmentation masks, image coverage and connected regions.</p></div>
-        <span className="subtle-tag">U-Net · 9-class segmentation</span></div>
+        <span className="subtle-tag">LR-ASPP · ResNet18 · Φ-Net</span></div>
       <div className="workspace-grid">
-        <InputPanel file={file} busy={busy} inspectionId={query} onFile={setFile} onId={setQuery}
+        <div className="input-stack"><InputPanel file={file} busy={busy} inspectionId={query} onFile={setFile} onId={setQuery}
           onPredict={() => void run("predict")} onRetrieve={() => void run("retrieve")} />
+          <HistoryPanel revision={inspection?.id} disabled={!!busy} onLoad={(id) => void run("retrieve", id)} />
+        </div>
         <div className="result-column" aria-busy={!!busy}>
           {error && <div className="error-banner" role="alert"><strong>Could not complete the request</strong><p>{error}</p></div>}
           {busy && <div className="panel progress-panel" role="status"><span className="progress-mark" aria-hidden="true" />
@@ -89,6 +93,7 @@ export default function App() {
                 <span className="small muted release-name">{inspection.model.dataset.release_id || "Release not specified"}</span></div>
             </section>
             <SegmentationViewer key={inspection.id} inspection={inspection} selected={selected} onClear={() => setSelectedId(null)} />
+            <ClassifierResults inspection={inspection} />
             <AnalyticsPanel key={inspection.id} inspection={inspection} selected={selected} onSelect={setSelectedId} />
           </> : !busy && <section className="panel empty-workspace" aria-labelledby="empty-title">
             <div className="empty-diagram" aria-hidden="true"><span /><span /><span /></div>

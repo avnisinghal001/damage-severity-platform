@@ -1,0 +1,13 @@
+# Explicit deployment choices, not model selection or a claim of cross-domain validity.
+[segmentation]
+path = "../outputs/task09/experiments/lraspp_matched_s42/best.pt"
+sha256 = "8fec529ea706398ce13febafd62856102041d2e1b1628d1eb3062118eae3af76"
+
+[crack]
+# User-selected Task 07 baseline; preserve its saved validation threshold.
+path = "../outputs/task07/experiments/sdnet_resnet_pilot/best.pt"
+sha256 = "e1b35d2248fc6ab5575dc01f61943cf981b7ee4b6426d02f1a754e7abf1e1f40"
+
+[severity]
+path = "../outputs/task10/experiments/phi7_resnet18_s42/best.pt"
+sha256 = "80ba7257ed74f07cd0eb7adc9612dfe215b78a22697d931e66c444aea061b732"

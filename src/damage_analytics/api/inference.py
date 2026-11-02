@@ -16,6 +16,8 @@ class Prediction:
 
     mask: np.ndarray
     analytics: dict
+    features: dict | None = None
+    crack: dict | None = None
 
 
 class Predictor(Protocol):

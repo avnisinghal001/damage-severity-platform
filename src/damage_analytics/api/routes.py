@@ -1,9 +1,10 @@
 """Thin HTTP routes; decoding, model work, filesystem IO and SQL run off the event loop."""
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
@@ -11,7 +12,9 @@ from starlette.datastructures import UploadFile
 from damage_analytics.api.errors import ApiError
 from damage_analytics.api.repository import Inspection
 from damage_analytics.api.schemas import (
+    IMAGE_UPLOAD_OPENAPI,
     ErrorResponse,
+    HistoryPage,
     InspectionResponse,
     ModelMetadata,
     Readiness,
@@ -47,6 +50,9 @@ def _response(record: Inspection) -> InspectionResponse:
         ],
         model=record.model_metadata,
         analytics=record.analytics,
+        features=record.features,
+        classification=record.classification,
+        severity=record.severity,
     )
 
 
@@ -60,9 +66,17 @@ async def health() -> dict[str, str]:
 async def ready(request: Request) -> JSONResponse:
     """Check the loaded model and migration/schema readiness without running inference."""
     database = await run_in_threadpool(_service(request).database_ready)
+    gateway = _service(request).severity
+    severity = await run_in_threadpool(gateway.ready) if gateway else None
+    healthy = database and severity is not False
     return JSONResponse(
-        {"status": "ready" if database else "not_ready", "model": True, "database": database},
-        status_code=200 if database else 503,
+        {
+            "status": "ready" if healthy else "not_ready",
+            "model": True,
+            "database": database,
+            "severity": severity,
+        },
+        status_code=200 if healthy else 503,
     )
 
 
@@ -76,20 +90,7 @@ async def model_metadata(request: Request) -> dict:
     "/inspections",
     response_model=InspectionResponse,
     status_code=201,
-    openapi_extra={
-        "requestBody": {
-            "required": True,
-            "content": {
-                "multipart/form-data": {
-                    "schema": {
-                        "type": "object",
-                        "required": ["file"],
-                        "properties": {"file": {"type": "string", "format": "binary"}},
-                    }
-                }
-            },
-        }
-    },
+    openapi_extra=IMAGE_UPLOAD_OPENAPI,
 )
 async def predict(request: Request) -> InspectionResponse:
     """Accept exactly one multipart file, with bounded bytes and no extra form fields."""
@@ -105,6 +106,25 @@ async def predict(request: Request) -> InspectionResponse:
         service.predict, data, media_type, request_id=request.state.request_id
     )
     return _response(record)
+
+
+@router.get("/inspections", response_model=HistoryPage)
+async def history(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    before: datetime | None = None,
+    before_id: UUID | None = None,
+) -> HistoryPage:
+    if (before is None) != (before_id is None) or (before is not None and before.tzinfo is None):
+        raise ApiError(422, "invalid_cursor", "Use both a timezone-aware before and before_id")
+    cursor = (before, before_id) if before is not None else None
+    rows = await run_in_threadpool(_service(request).history, limit, cursor)
+    has_more = len(rows) == limit
+    return HistoryPage(
+        items=rows,
+        next_before=rows[-1]["created_at"] if has_more else None,
+        next_before_id=rows[-1]["id"] if has_more else None,
+    )
 
 
 @router.get("/inspections/{identifier}", response_model=InspectionResponse)

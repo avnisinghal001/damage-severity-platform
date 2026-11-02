@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from damage_analytics.api.config import Settings
+from damage_analytics.api.config import UploadLimits
 from damage_analytics.api.errors import ApiError
 
 
@@ -18,7 +18,7 @@ class DecodedUpload:
     source_mode: str
 
 
-def decode_upload(data: bytes, media_type: str | None, settings: Settings) -> DecodedUpload:
+def decode_upload(data: bytes, media_type: str | None, settings: UploadLimits) -> DecodedUpload:
     """Inspect headers before allocation; verify and fully decode only JPEG/PNG images."""
     if not data:
         raise ApiError(422, "empty_image", "The uploaded image is empty")
@@ -46,6 +46,8 @@ def decode_upload(data: bytes, media_type: str | None, settings: Settings) -> De
             source.verify()
         with Image.open(io.BytesIO(data)) as source:
             source.load()
+            if source.getexif().get(274, 1) not in range(1, 9):
+                raise ApiError(422, "invalid_orientation", "Image EXIF orientation is invalid")
             image = ImageOps.exif_transpose(source).convert("RGB")
             # Stored derivatives contain pixels only, not embedded source EXIF/GPS metadata.
             clean = Image.frombytes("RGB", image.size, image.tobytes())

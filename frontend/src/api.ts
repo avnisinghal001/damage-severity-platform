@@ -1,5 +1,5 @@
 import { CLASSES } from "./palette";
-import type { Inspection, ModelMetadata, Readiness } from "./types";
+import type { HistoryPage, Inspection, ModelMetadata, Readiness } from "./types";
 
 const API = "/api";
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -71,6 +71,7 @@ function checkInspection(value: unknown): Inspection {
     throw new ApiError("Unsupported inspection response or image size. Native alignment could not be verified.");
   }
   checkModel(v.model);
+  checkClassifiers(v);
   if (v.analytics.classes.length !== 9 || new Set(v.analytics.classes.map((c) => c.class_id)).size !== 9
     || !v.analytics.classes.every((c) => CLASSES.some((known) => known.id === c.class_id && known.label === c.source_label)
       && Number.isSafeInteger(c.area_pixels) && c.area_pixels >= 0
@@ -104,6 +105,45 @@ function checkInspection(value: unknown): Inspection {
   artifactUrl(v, "image");
   artifactUrl(v, "mask");
   return v;
+}
+
+function checkClassifiers(v: Inspection): void {
+  const crack = v.classification;
+  if (crack && (crack.calibrated !== false || ![0, 1].includes(crack.class_id)
+    || crack.label !== ["no_crack", "crack"][crack.class_id]
+    || !Number.isFinite(crack.crack_probability) || crack.crack_probability < 0 || crack.crack_probability > 1
+    || !Number.isFinite(crack.decision_threshold) || crack.decision_threshold < 0 || crack.decision_threshold > 1.000001
+    || crack.class_id !== Number(crack.crack_probability >= crack.decision_threshold)
+    || !/^[0-9a-f]{64}$/.test(crack.model?.checkpoint_sha256))) {
+    throw new ApiError("Invalid crack classification contract.");
+  }
+  const severity = v.severity;
+  if (!severity) return;
+  if (severity.status === "unavailable" && typeof severity.message === "string") return;
+  if (severity.status !== "available") throw new ApiError("Invalid severity availability status.");
+  const labels = ["Heavy", "Minor", "Moderate", "Undamaged"];
+  if (severity.calibrated !== false || labels[severity.class_id] !== severity.label
+    || severity.width !== v.width || severity.height !== v.height
+    || !Number.isFinite(severity.confidence) || severity.confidence < 0 || severity.confidence > 1
+    || !Array.isArray(severity.probabilities) || severity.probabilities.length !== 4
+    || !severity.probabilities.every((p, i) => p.class_id === i && p.label === labels[i]
+      && Number.isFinite(p.probability) && p.probability >= 0 && p.probability <= 1)
+    || Math.abs(severity.probabilities.reduce((n, p) => n + p.probability, 0) - 1) > 1e-5
+    || !/^[0-9a-f]{64}$/.test(severity.model?.checkpoint_sha256)) {
+    throw new ApiError("Invalid Phi-Net class mapping, probabilities or image alignment.");
+  }
+}
+
+export async function getHistory(signal: AbortSignal, cursor?: { before: string; id: string }): Promise<HistoryPage> {
+  const params = new URLSearchParams({ limit: "20" });
+  if (cursor) { params.set("before", cursor.before); params.set("before_id", cursor.id); }
+  const value = await json(`/inspections?${params}`, { signal }) as HistoryPage;
+  if (!Array.isArray(value.items) || !value.items.every((item) => UUID_PATTERN.test(item.id)
+      && Number.isFinite(Date.parse(item.created_at)))
+    || (value.next_before_id !== null && !UUID_PATTERN.test(value.next_before_id))) {
+    throw new ApiError("Invalid inspection history response.");
+  }
+  return value;
 }
 
 export async function predict(file: File, signal: AbortSignal): Promise<Inspection> {

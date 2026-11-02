@@ -61,6 +61,13 @@ export interface Inspection {
   mask: { url: string; sha256: string; media_type: "image/png" };
   detected_classes: ClassArea[];
   model: ModelMetadata;
+  classification?: CrackResult | null;
+  severity?: SeverityResult | null;
+  features?: {
+    schema_version: "damage-features-v1";
+    regions: { region_id: string; perimeter_pixel_edges: number; eccentricity: number | null;
+      bbox_fill_fraction: number; moment_major_axis_pixels: number }[];
+  } | null;
   analytics: {
     schema_version: number;
     measurement_space: "image_pixels";
@@ -77,4 +84,47 @@ export interface Readiness {
   status: "ready" | "not_ready";
   model: boolean;
   database: boolean;
+  severity?: boolean | null;
+}
+
+export interface ClassifierProvenance {
+  checkpoint_sha256: string;
+  epoch: number;
+  architecture: "resnet18";
+  dataset: { release_id?: string };
+  device: "cpu" | "mps";
+  limitations: string[];
+}
+
+export interface CrackResult {
+  class_id: 0 | 1;
+  label: "no_crack" | "crack";
+  crack_probability: number;
+  calibrated: false;
+  decision_threshold: number;
+  model: ClassifierProvenance;
+}
+
+export type SeverityResult = {
+  status: "unavailable";
+  reason: string;
+  message: string;
+} | {
+  status: "available";
+  class_id: 0 | 1 | 2 | 3;
+  label: "Heavy" | "Minor" | "Moderate" | "Undamaged";
+  confidence: number;
+  calibrated: false;
+  probabilities: { class_id: number; label: string; probability: number }[];
+  normalized_entropy: number;
+  width: number;
+  height: number;
+  model: ClassifierProvenance;
+};
+
+export interface HistoryPage {
+  items: { id: string; created_at: string; width: number; height: number;
+    classification: CrackResult | null; severity: SeverityResult | null }[];
+  next_before: string | null;
+  next_before_id: string | null;
 }

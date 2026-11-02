@@ -1,0 +1,29 @@
+archive = "../data/external/phi_net_task7/task7_damage_level.zip"
+output_dir = "../outputs/task10"
+seed = 42
+validation_fraction = 0.20 # From official training rows ONLY
+expected_image_shape = [224, 224, 3]
+source_groups_csv = "" # Optional: sample_id,source_group,evidence; never generated identities
+encoding = "caffe_bgr"
+encoding_verified = false # Numeric evidence alone does not authenticate publisher channel semantics
+encoding_evidence = ""
+roundtrip_tolerance = 0.001
+phash_distance = 4
+dhash_distance = 6
+thumbnail_mae = 0.06 # Normalized grayscale MAE; screening heuristic, not identity truth
+crop_fraction = 0.75
+maximum_near_pairs = 100000
+
+[training]
+epochs = 25
+batch_size = 32
+learning_rate = 0.0003
+weight_decay = 0.0001
+patience = 6
+min_delta = 0.0001
+class_weighting = "balanced"
+scheduler = "cosine"
+image_size = 224
+num_workers = 0
+cpu_threads = 1
+deterministic = false

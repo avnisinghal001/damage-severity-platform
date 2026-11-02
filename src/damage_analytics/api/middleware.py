@@ -8,7 +8,7 @@ from uuid import uuid4
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from damage_analytics.api.config import Settings
+from damage_analytics.api.config import UploadLimits
 
 logger = logging.getLogger("damage_analytics.api")
 
@@ -16,7 +16,7 @@ logger = logging.getLogger("damage_analytics.api")
 class RequestMiddleware:
     """Allow one upload/inference per worker; health/retrieval requests remain independent."""
 
-    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+    def __init__(self, app: ASGIApp, settings: UploadLimits) -> None:
         self.app, self.settings = app, settings
         self.upload_active = False
 

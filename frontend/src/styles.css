@@ -48,6 +48,15 @@ p { margin-bottom: 12px; }
 .page-heading p:last-child { margin-bottom: 0; }
 .subtle-tag { display: inline-flex; align-items: center; flex-shrink: 0; border: 1px solid #d5e2dc; border-radius: 6px; padding: 6px 10px; background: #edf3ef; color: #42635b; font-size: 11px; font-weight: 600; }
 .workspace-grid { display: grid; grid-template-columns: 298px minmax(0, 1fr); align-items: start; gap: 24px; }
+.input-stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.classifier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 24px; margin-top: 20px; }
+.classification-label { font-size: 22px; font-weight: 600; }
+.hash-wrap { overflow-wrap: anywhere; }
+.probability-list > div { display: flex; justify-content: space-between; gap: 12px; }
+.history-list { padding: 0; list-style: none; }
+.history-button { width: 100%; display: flex; flex-direction: column; gap: 6px; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #e0e5e7; padding: 12px 0; cursor: pointer; font: inherit; }
+.history-button:hover { color: #13665b; }
+.history-button span, .history-button code { font-size: 12px; }
 .input-column, .result-column, .analytics-stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .panel { background: #fff; border: 1px solid #dfe6e1; border-radius: 12px; }
 .input-panel { padding: 23px; }

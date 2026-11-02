@@ -2,8 +2,35 @@
 
 The installed package uses a `src/` layout: application code lives under
 `src/damage_analytics`, separate from tests, documentation, data, and generated files.
-The CLI coordinates plain functions; there is no service layer, training framework,
-database, or hidden download step.
+Dataset/research CLIs coordinate reusable functions. The API and independent severity
+service add serving and PostgreSQL persistence without coupling training to application
+startup. See [Task 12](task12.md) for the current deployment and endpoint contracts.
+
+## Integrated application (Task 12)
+
+```mermaid
+flowchart LR
+  UI[React / Nginx] -->|upload / history| API[FastAPI backend]
+  API --> SEG[Resident Task 09 LR-ASPP + native pixel features]
+  API --> CRACK[Resident Task 07 ResNet18 + frozen threshold]
+  API -->|sanitized PNG over HTTP| PHI[Independent FastAPI / Phi-Net ResNet18]
+  API -->|metadata / features / predictions| DB[(PostgreSQL)]
+  API -->|image / mask PNGs| FILES[Persistent artifact volume]
+  API -->|aligned results + availability| UI
+```
+
+`serving/classifiers.py` reuses checkpoint loaders and original classification preprocessing;
+`serving/segmentation.py` reuses Task 09 inference/features and translates measurements for
+the existing Canvas/dashboard contract. `serving/contracts.py` validates distinct crack and
+Phi-Net labels. `severity_app.py` owns the independent model lifecycle; `severity_client.py`
+validates HTTP responses against image pixels and the configured checkpoint pin. An outage
+is stored as unavailable, with no invented label. API service/repository code persists the
+full result; migration 002 preserves existing inspections with nullable new fields.
+Explicit migrations run as a Compose job, not inside app startup. React history retrieval
+does not repeat inference. Raw coverage and native coordinate alignment are preserved.
+The four services use separate read-only checkpoint mounts and persistent DB/artifact volumes.
+Linux containers use CPU; native settings also support Apple MPS. No severity model is trained
+on RC1841 region features, and model outputs are not combined into a structural safety grade.
 
 ```mermaid
 flowchart TD

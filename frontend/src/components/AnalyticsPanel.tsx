@@ -21,6 +21,7 @@ export function AnalyticsPanel({ inspection, selected, onSelect }: Props) {
     filter === "all" || row.class_id === Number(filter)), [inspection, filter]);
   const pageCount = Math.max(1, Math.ceil(regions.length / PAGE_SIZE));
   const visible = regions.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const geometry = selected && inspection.features?.regions[selected.region_id - 1];
 
   return <div className="analytics-stack">
     <div className="stat-grid" aria-label="Image-space summary">
@@ -68,6 +69,9 @@ export function AnalyticsPanel({ inspection, selected, onSelect }: Props) {
             <div><button type="button" className="button secondary compact" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
               <button type="button" className="button secondary compact" disabled={page + 1 >= pageCount} onClick={() => setPage(page + 1)}>Next</button></div></div></>}
       <p className="field-help">Boxes use native pixel coordinates [x₀, y₀, x₁, y₁] with exclusive maximum coordinates. Region reporting filters do not change class-area totals.</p>
+      {connected > inspection.analytics.regions.length && <p className="field-help">
+        Showing {integer(inspection.analytics.regions.length)} of {integer(connected)} regions;
+        the report limit does not remove pixels from the displayed mask or coverage totals.</p>}
 
       {selected && <section className="region-detail" aria-labelledby="selected-region-title">
         <div className="section-header"><h3 id="selected-region-title" aria-live="polite">Region #{selected.region_id} · {selected.source_label}</h3>
@@ -77,6 +81,10 @@ export function AnalyticsPanel({ inspection, selected, onSelect }: Props) {
           <div><dt>Touches image boundary</dt><dd>{selected.touches_image_boundary ? "Yes" : "No"}</dd></div>
           <div><dt>Mean maximum softmax · uncalibrated</dt><dd>{score(selected.uncertainty.mean_maximum_softmax)}</dd></div>
           <div><dt>Mean normalized entropy · uncalibrated</dt><dd>{score(selected.uncertainty.mean_normalized_entropy)}</dd></div>
+          {geometry && <>
+            <div><dt>Pixel-grid perimeter</dt><dd>{integer(geometry.perimeter_pixel_edges)} pixel edges</dd></div>
+            <div><dt>Moment major axis</dt><dd>{geometry.moment_major_axis_pixels.toFixed(2)} pixels</dd></div>
+          </>}
         </dl>
         <p className="small">Score status: <span className="status-words">{humanize(selected.uncertainty.status)}</span>. These values are not calibrated probabilities of a correct prediction.</p>
         {selected.uncertainty.review_flags.length > 0 && <ul className="review-flags">

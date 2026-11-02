@@ -28,6 +28,7 @@ def create_app(
     *,
     repository: Repository | None = None,
     predictor_factory: Callable[[Settings], Predictor] | None = None,
+    severity_client_factory=None,
 ) -> FastAPI:
     """Construct an app with injectable boundaries for tests; imports do not load weights."""
     settings = settings or Settings.from_env()
@@ -35,14 +36,23 @@ def create_app(
     repository = repository or PostgresRepository(
         settings.database_url, settings.database_timeout_seconds
     )
+    if predictor_factory is None and settings.crack_checkpoint:
+        from damage_analytics.serving.segmentation import IntegratedPredictor
+
+        predictor_factory = IntegratedPredictor
     predictor_factory = predictor_factory or Segmenter
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         def initialize() -> InspectionService:
             predictor = predictor_factory(settings)
+            severity = None
+            if settings.severity_url:
+                from damage_analytics.serving.severity_client import SeverityClient
+
+                severity = (severity_client_factory or SeverityClient)(settings)
             return InspectionService(
-                settings, predictor, repository, ArtifactStore(settings.storage_dir)
+                settings, predictor, repository, ArtifactStore(settings.storage_dir), severity
             )
 
         app.state.service = await run_in_threadpool(initialize)
@@ -50,6 +60,8 @@ def create_app(
         try:
             yield
         finally:
+            if app.state.service.severity:
+                await run_in_threadpool(app.state.service.severity.close)
             app.state.service = None  # Release the worker's model reference on shutdown.
             logger.info("worker_stopped")
 

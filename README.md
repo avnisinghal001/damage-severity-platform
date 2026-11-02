@@ -1,5 +1,11 @@
 # Damage Analytics and Severity Prediction Platform
 
+**Integrated application (Task 12):** FastAPI now connects the selected Task 09 LR-ASPP,
+Task 07 crack ResNet18, an independent Φ-Net severity HTTP service, PostgreSQL and the
+React dashboard with saved-inspection history. See [Task 12 launch and verification](docs/task12.md)
+for exact Mac/Docker commands, checkpoint pins, migrations and actual test results.
+Predictions remain uncalibrated image/component observations, not structural safety scores.
+
 Task 01 provides the dataset foundation for future concrete damage research:
 safe ingestion, validation, exploratory analysis, and sample visualization.
 It does not train models, infer severity, or implement an API or frontend.
