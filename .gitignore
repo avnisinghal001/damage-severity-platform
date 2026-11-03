@@ -13,3 +13,16 @@ htmlcov/
 /outputs/
 .env
 .env.*
+!.env.example
+
+# JavaScript tooling and local deployment metadata
+node_modules/
+*.tsbuildinfo
+.vercel/
+.vite/
+
+# Local caches, logs and macOS archive metadata
+.mypy_cache/
+*.log
+__MACOSX/
+._*
