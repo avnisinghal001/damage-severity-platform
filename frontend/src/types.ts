@@ -80,13 +80,6 @@ export interface Inspection {
   };
 }
 
-export interface Readiness {
-  status: "ready" | "not_ready";
-  model: boolean;
-  database: boolean;
-  severity?: boolean | null;
-}
-
 export interface ClassifierProvenance {
   checkpoint_sha256: string;
   epoch: number;
@@ -121,10 +114,3 @@ export type SeverityResult = {
   height: number;
   model: ClassifierProvenance;
 };
-
-export interface HistoryPage {
-  items: { id: string; created_at: string; width: number; height: number;
-    classification: CrackResult | null; severity: SeverityResult | null }[];
-  next_before: string | null;
-  next_before_id: string | null;
-}

@@ -1,24 +1,53 @@
-import { useEffect, useRef, useState } from "react";
-import { errorMessage, getInspection, predict, UUID_PATTERN } from "./api";
-import { AnalyticsPanel } from "./components/AnalyticsPanel";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DragEvent, ReactNode } from "react";
+import { errorMessage } from "./api";
+import { analyze, loadEngine, ROLES } from "./local/engine";
+import type { Engine, ProgressMap } from "./local/engine";
+import { validateFile } from "./files";
 import { InputPanel } from "./components/InputPanel";
+import { ResultCard } from "./components/ResultCard";
 import { SegmentationViewer } from "./components/SegmentationViewer";
-import { ServerStatus } from "./components/ServerStatus";
+import { Scanner } from "./components/Scanner";
+import { LoadingScreen } from "./components/LoadingScreen";
 import { ClassifierResults } from "./components/ClassifierResults";
-import { HistoryPanel } from "./components/HistoryPanel";
-import type { Inspection } from "./types";
+import type { ClassId, Inspection } from "./types";
 
-type Operation = "predict" | "retrieve";
+type Operation = "predict";
+type Panel = "details" | null;
+
+const emptyProgress = (): ProgressMap =>
+  Object.fromEntries(ROLES.map((role) => [role, { loaded: 0, total: 0, done: false }])) as ProgressMap;
+
+function Sheet({ title, onClose, children }: { title: string; onClose(): void; children: ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog className="info-sheet" ref={dialog} onCancel={onClose} onClose={onClose} aria-labelledby="sheet-title"
+    onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="sheet-surface">
+      <div className="sheet-header"><h2 id="sheet-title">{title}</h2>
+        <button className="icon-button" type="button" aria-label="Close panel" onClick={onClose}>×</button></div>
+      <div className="sheet-content">{children}</div>
+    </div>
+  </dialog>;
+}
 
 export default function App() {
-  const [file, setFile] = useState<File | null>(null);
-  const [query, setQuery] = useState("");
+  const [engine, setEngine] = useState<Engine | null>(null);
+  const [progress, setProgress] = useState<ProgressMap>(emptyProgress);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loaderGone, setLoaderGone] = useState(false);
+    const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedClassId, setSelectedClassId] = useState<ClassId | null>(null);
   const [busy, setBusy] = useState<Operation | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(true);
+  const [panel, setPanel] = useState<Panel>(null);
   const active = useRef(false);
   const mounted = useRef(true);
+  const lastPredictedFile = useRef<File | null>(null);
   const controller = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -26,85 +55,162 @@ export default function App() {
     return () => { mounted.current = false; controller.current?.abort(); };
   }, []);
 
-  async function run(operation: Operation, savedId?: string) {
-    if (active.current) return;
-    const id = savedId || query.trim();
-    if (operation === "retrieve" && !UUID_PATTERN.test(id)) {
-      setError("Enter a complete inspection UUID, including its hyphens.");
-      return;
-    }
-    if (operation === "predict" && !file) return;
+  // Download and start all three models in parallel as soon as the page opens.
+  useEffect(() => {
+    const request = new AbortController();
+    setLoadError(null);
+    setProgress(emptyProgress());
+    loadEngine((role, value) => setProgress((current) => ({ ...current, [role]: value })), request.signal)
+      .then((loaded) => { if (!request.signal.aborted) setEngine(loaded); })
+      .catch((reason: unknown) => {
+        if (request.signal.aborted) return;
+        console.error(reason);
+        setLoadError(reason instanceof Error ? reason.message : "Check your connection and try again.");
+      });
+    return () => request.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!file) { setPreview(null); return; }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  // Free the previous result's in-memory image and mask when a new one replaces it.
+  useEffect(() => {
+    if (!inspection) return;
+    return () => { URL.revokeObjectURL(inspection.image.url); URL.revokeObjectURL(inspection.mask.url); };
+  }, [inspection]);
+
+  const run = useCallback(async (nextFile?: File) => {
+    if (active.current || !engine) return;
+    const targetFile = nextFile ?? file;
+    if (!targetFile) return;
+    lastPredictedFile.current = targetFile;
     active.current = true;
     const request = new AbortController();
     controller.current = request;
-    let timedOut = false;
-    const timeout = window.setTimeout(() => { timedOut = true; request.abort(); }, 120_000);
-    setBusy(operation);
-    setError(null);
-    setInspection(null);
-    setSelectedId(null);
+    setBusy("predict"); setError(null); setInspection(null);
+    setSelectedId(null); setSelectedClassId(null);
+    setUploadOpen(false); setPanel(null);
     try {
-      const result = operation === "predict"
-        ? await predict(file!, request.signal) : await getInspection(id, request.signal);
-      if (mounted.current && !request.signal.aborted) {
-        setInspection(result);
-        setQuery(result.id);
-      }
+      // Keep the analyzing view on screen long enough to read, even when the result is instant.
+      const [result] = await Promise.all([
+        analyze(engine, targetFile, request.signal),
+        new Promise((resolve) => setTimeout(resolve, 2200)),
+      ]);
+      if (mounted.current && !request.signal.aborted) setInspection(result);
     } catch (reason) {
-      if (mounted.current) setError(timedOut
-        ? `The request timed out.${operation === "predict" ? " The backend may still save the inspection; uploads are not automatically retried." : " Try loading the UUID again."}`
-        : errorMessage(reason));
+      if (mounted.current) {
+        setError(errorMessage(reason));
+        setUploadOpen(true);
+      }
     } finally {
-      window.clearTimeout(timeout);
       active.current = false;
       if (mounted.current) setBusy(null);
+    }
+  }, [engine, file]);
+
+  // Immediately analyze any uploaded file once the crew is on site.
+  useEffect(() => {
+    if (engine && file && file !== lastPredictedFile.current && !busy && !active.current) {
+      void run(file);
+    }
+  }, [engine, file, busy, run]);
+
+  const chooseFile = useCallback((next: File | null) => {
+    setFile(next);
+    if (!next) {
+      lastPredictedFile.current = null;
+      return;
+    }
+    setInspection(null);
+    setSelectedId(null);
+    setSelectedClassId(null);
+    setError(null);
+    setUploadOpen(false);
+  }, []);
+
+  async function onWorkspaceDrop(event: DragEvent<HTMLElement>) {
+    if (event.defaultPrevented || busy) return;
+    const dropped = Array.from(event.dataTransfer?.files ?? []);
+    if (!dropped.length) return;
+    event.preventDefault();
+    if (dropped.length !== 1) {
+      setError("Choose one image at a time.");
+      return;
+    }
+    try {
+      const accepted = await validateFile(dropped[0]);
+      chooseFile(accepted);
+    } catch (reason) {
+      setError(errorMessage(reason));
     }
   }
 
   const selected = inspection?.analytics.regions.find((row) => row.region_id === selectedId) ?? null;
-  return <>
-    <a className="skip-link" href="#workspace">Skip to inspection workspace</a>
+  const hasImage = !!inspection || !!preview;
+  const showResultCard = !!inspection && !uploadOpen;
+
+  return <div className="app-shell">
+    {!loaderGone && <LoadingScreen progress={progress} ready={!!engine} error={loadError}
+      onRetry={() => window.location.reload()} onGone={() => setLoaderGone(true)} />}
+    <a className="skip-link" href="#workspace">Skip to image</a>
     <header className="app-header"><div className="header-inner">
-      <div className="brand"><span className="brand-mark" aria-hidden="true">C<span>09</span></span>
-        <div><strong>Concrete</strong><span>Damage analytics</span></div></div>
-      <ServerStatus />
+      <a className="brand" href="#workspace" aria-label="Concrete workspace"><span className="brand-mark" aria-hidden="true">C<span>09</span></span><strong>Concrete</strong></a>
+      <nav className="app-actions" aria-label="Workspace actions">
+        <button type="button" className="button primary" disabled={!!busy} onClick={() => setUploadOpen(true)}><span aria-hidden="true">+</span> New image</button>
+      </nav>
     </div></header>
-    <main className="page-shell" id="workspace">
-      <div className="page-heading"><div><p className="eyebrow">Research & inspection workspace</p>
-        <h1>Concrete damage, in focus.</h1>
-        <p className="muted">Explore segmentation masks, image coverage and connected regions.</p></div>
-        <span className="subtle-tag">LR-ASPP · ResNet18 · Φ-Net</span></div>
-      <div className="workspace-grid">
-        <div className="input-stack"><InputPanel file={file} busy={busy} inspectionId={query} onFile={setFile} onId={setQuery}
-          onPredict={() => void run("predict")} onRetrieve={() => void run("retrieve")} />
-          <HistoryPanel revision={inspection?.id} disabled={!!busy} onLoad={(id) => void run("retrieve", id)} />
-        </div>
-        <div className="result-column" aria-busy={!!busy}>
-          {error && <div className="error-banner" role="alert"><strong>Could not complete the request</strong><p>{error}</p></div>}
-          {busy && <div className="panel progress-panel" role="status"><span className="progress-mark" aria-hidden="true" />
-            <div><strong>{busy === "predict" ? "Analyzing the image" : "Retrieving the inspection"}</strong>
-              <p className="muted">{busy === "predict" ? "The backend is generating a native-resolution mask and region measurements." : "Loading the saved result without running inference again."}</p></div></div>}
-          {inspection ? <>
-            <section className="inspection-heading" aria-label="Inspection provenance">
-              <div><p className="eyebrow">Saved inspection</p><h2 className="inspection-uuid">{inspection.id}</h2>
-                <p className="small muted">{new Date(inspection.created_at).toLocaleString()} · {inspection.model.device.toUpperCase()} · checkpoint epoch {inspection.model.checkpoint_epoch}</p></div>
-              <div className="checkpoint-meta"><span className="small muted">Checkpoint SHA-256</span>
-                <code title={inspection.model.checkpoint_sha256}>{inspection.model.checkpoint_sha256.slice(0, 16)}…</code>
-                <span className="small muted release-name">{inspection.model.dataset.release_id || "Release not specified"}</span></div>
-            </section>
-            <SegmentationViewer key={inspection.id} inspection={inspection} selected={selected} onClear={() => setSelectedId(null)} />
-            <ClassifierResults inspection={inspection} />
-            <AnalyticsPanel key={inspection.id} inspection={inspection} selected={selected} onSelect={setSelectedId} />
-          </> : !busy && <section className="panel empty-workspace" aria-labelledby="empty-title">
-            <div className="empty-diagram" aria-hidden="true"><span /><span /><span /></div>
-            <p className="eyebrow">Ready for an inspection</p><h2 id="empty-title">An image is the starting point.</h2>
-            <p>Upload a JPEG or PNG, or load an inspection UUID. Your original image, aligned prediction and region measurements will appear here.</p>
-            <div className="empty-features"><span>Native mask alignment</span><span>Pixel-level coverage</span><span>Region exploration</span></div>
-            <p className="field-help">Predictions support image analysis. They do not certify structural safety.</p>
-          </section>}
-        </div>
+    <main
+      id="workspace"
+      className={`image-workspace ${hasImage ? "has-image" : ""} ${showResultCard ? "has-result-card" : ""}`}
+      aria-busy={!!busy}
+      onDragOver={(event) => { if (!busy) event.preventDefault(); }}
+      onDrop={(event) => void onWorkspaceDrop(event)}
+    >
+      <h1 className="sr-only">Concrete photo inspection</h1>
+      {inspection ? (
+        <SegmentationViewer
+          key={inspection.id}
+          inspection={inspection}
+          selected={selected}
+          selectedClassId={selectedClassId}
+          onClear={() => {
+            setSelectedId(null);
+            setSelectedClassId(null);
+          }}
+        />
+      ) : preview ? (
+        busy ? <Scanner src={preview} /> : <img className="workspace-photo" src={preview} alt="Photo ready to analyze" />
+      ) : (
+        <div className="empty-frame" aria-hidden="true"><i /><i /><i /><i /></div>
+      )}
+      <div className="workspace-label">{inspection ? "Inspection" : "New inspection"}<span>{inspection ? new Date(inspection.created_at).toLocaleDateString() : ""}</span></div>
+      <div className={`upload-float ${!uploadOpen || busy ? "is-hidden" : ""}`} aria-hidden={!uploadOpen || !!busy}>
+        {hasImage && <button type="button" className="icon-button upload-close" aria-label="Hide upload panel" onClick={() => setUploadOpen(false)}>×</button>}
+        <InputPanel compact file={file} busy={busy} onFile={chooseFile} onPredict={() => void run()} />
       </div>
+      {showResultCard && (
+        <ResultCard
+          inspection={inspection}
+          onOpenDetails={() => setPanel("details")}
+        />
+      )}
+      {error && <div className="error-float" role="alert"><p>{error}</p><button className="icon-button" type="button" aria-label="Dismiss error" onClick={() => setError(null)}>×</button></div>}
+      {!inspection && !busy && <div className="workspace-bottom"><span>{file ? file.name : "Drop or paste a concrete photo to analyze immediately"}</span><button type="button" className="text-button" onClick={() => setPanel("details")}>How it works</button></div>}
     </main>
-    <footer className="app-footer"><span>Damage Analytics & Severity Prediction Platform</span><span>Image-space evidence · No structural safety score</span></footer>
-  </>;
+    <footer className="status-bar"><div className="server-status"><div><span className={`status-dot ${engine ? "ready" : ""}`} aria-hidden="true" />
+      <span className="status-title" role="status">{engine ? "Crew on site" : "Crew arriving"}</span></div></div><span>Visual inspection</span></footer>
+    {panel && <Sheet title="About this inspection" onClose={() => setPanel(null)}>
+      <section className="help-content"><h3>A closer look at concrete</h3><p>Choose, drop, or paste a JPEG or PNG to analyze it automatically. Use Photo, Damage, and Mask to compare the original image with its highlights.</p>
+        <p>Undamaged results show the original image without highlights.</p>
+        <p>These are predictions of visible damage, not a structural safety assessment.</p></section>
+      {inspection && <><ClassifierResults inspection={inspection} /><details className="model-details"><summary>Technical details</summary>
+        <dl><dt>Inspection ID</dt><dd className="hash-wrap">{inspection.id}</dd><dt>Segmentation checkpoint</dt><dd className="hash-wrap">{inspection.model.checkpoint_sha256}</dd>
+          <dt>Dataset</dt><dd>{inspection.model.dataset.release_id || "Not specified"}</dd><dt>Runtime</dt><dd>epoch {inspection.model.checkpoint_epoch}</dd></dl>
+      </details></>}
+    </Sheet>}
+  </div>;
 }

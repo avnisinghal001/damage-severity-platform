@@ -1,0 +1,91 @@
+{
+ "format": 1,
+ "segmentation": {
+  "file": "segmentation.e68a4826ed.onnx",
+  "sha256": "8fec529ea706398ce13febafd62856102041d2e1b1628d1eb3062118eae3af76",
+  "epoch": 21,
+  "dataset": {
+   "release_id": "rc1841-curated-v1-d34771dbb662406a",
+   "checksums_sha256": "f58383140a91339a7839abbe6d99b5c65e2b271d9fe33cf0b43335dcc3f7eef8",
+   "split_hashes": {
+    "train": "c766b590c4dc1c8ae4bfb33408b82349308dd92fc13050f1e87d4f01ed173cd8",
+    "validation": "db22b3e9046fd993ea712c0b7fbff701a0745a84548fff68604bc5c7df607950",
+    "test": "455e76654739e3e91c71553946cb0863ce355ebc32d02e1584e0080379f9a9f7"
+   }
+  },
+  "height": 256,
+  "width": 256,
+  "mean": [
+   0.485,
+   0.456,
+   0.406
+  ],
+  "std": [
+   0.229,
+   0.224,
+   0.225
+  ],
+  "classes": 9,
+  "bytes": 12875081
+ },
+ "crack": {
+  "file": "crack.ee1c6dc662.onnx",
+  "sha256": "e1b35d2248fc6ab5575dc01f61943cf981b7ee4b6426d02f1a754e7abf1e1f40",
+  "epoch": 5,
+  "size": 224,
+  "threshold": 0.40030238032341003,
+  "dataset": {
+   "release_id": "sdnet2018-a52402f4884726cc",
+   "checksums_sha256": "80ab70d2b38c36660dbbcf1d0bfb483f2a9eeb4388ae30a403359d66f95f01f5",
+   "splits": {
+    "train": "f46cccb31672c2d2e5714861cb7efa7cf14d37dbce7ea51984b604e50890ab6f",
+    "validation": "315eca1d6a4f3b0b808db59293af195a04511cd4c202786ff113bafc1135f837",
+    "test": "b36ede5b698af10a7977ad25537f6cd77e760e3ba662866881bce9edc2cc8156"
+   }
+  },
+  "mean": [
+   0.485,
+   0.456,
+   0.406
+  ],
+  "std": [
+   0.229,
+   0.224,
+   0.225
+  ],
+  "bytes": 44700648
+ },
+ "severity": {
+  "file": "severity.c1d68843c2.onnx",
+  "sha256": "80ba7257ed74f07cd0eb7adc9612dfe215b78a22697d931e66c444aea061b732",
+  "epoch": 16,
+  "size": 224,
+  "classes": [
+   "Heavy",
+   "Minor",
+   "Moderate",
+   "Undamaged"
+  ],
+  "dataset": {
+   "release_id": "phi7-aa0dd3b1e24ff2fa",
+   "seal_sha256": "cca766e974aea5575cf25ac03ae121639a065114453e1c390a35821d4bd91530",
+   "manifest_hashes": {
+    "train": "616ebbaec3db8bddfc2ad76fb002685ed7c20b4e8aaf206ac18dd2d49f94b007",
+    "validation": "8917062540ba6be0b66620e996f961e93ed08f5776764b34b246a70361c9cce6",
+    "official_test": "61bc4836dc780231200a3fc167d789c2dddb08fd5e5d1c01f538df6264877bbd",
+    "quarantine": "6d220a2a50a42f808ba889b0c2376d41306f90668a1a3c189c1a774f8b6f35a5"
+   }
+  },
+  "mean": [
+   0.485,
+   0.456,
+   0.406
+  ],
+  "std": [
+   0.229,
+   0.224,
+   0.225
+  ],
+  "bytes": 44704752
+ }
+}
