@@ -1,90 +1,56 @@
 # Concrete — Damage Analytics and Severity Prediction Platform
 
-A browser-based research application for inspecting visible damage in concrete photographs. **Three trained neural networks run locally in the browser** to produce a nine-class segmentation mask, a crack/no-crack decision, and a four-class visible damage-level prediction.
+**[Open the live application →](https://concrete-damage-severity.vercel.app/)**
 
-The interface uses React, TypeScript and Vite. The trained models are packaged as ONNX files and executed with ONNX Runtime WebAssembly. This README describes the models and behavior used by the **current frontend**, together with the training data and evidence behind those specific checkpoints.
+An ML-powered visual inspection platform for analyzing visible damage in concrete photographs. The project combines **semantic segmentation**, **crack classification** and **component damage-level prediction** to turn an input image into interpretable masks, category predictions and image-space measurements.
 
-> Predictions describe visible image patterns. Confidence is uncalibrated, image coverage is not physical surface area, and component damage labels are not a structural safety assessment.
+## Overview
+
+Concrete inspection involves several related questions: where visible damage occurs, whether a crack is present, and which damage-level category best describes the image. This project addresses those questions with complementary models trained on RC1841, SDNET2018 and PEER Φ-Net Task 7.
+
+The workflow covers dataset validation and curation, transfer learning, reproducible checkpoint selection, ONNX model export and an interactive web application. Each prediction retains its own task meaning: damage categories, crack presence and visible component damage level are distinct outputs.
+
+> This is a research and visual-analysis tool. Model confidence is uncalibrated, image coverage is not physical surface area, and component damage labels do not establish structural safety.
 
 ## Contents
 
-- [Run the application](#run-the-application)
-- [What the frontend currently does](#what-the-frontend-currently-does)
-- [Models used by the frontend](#models-used-by-the-frontend)
+- [Live application](https://concrete-damage-severity.vercel.app/)
+- [Key capabilities](#key-capabilities)
+- [Machine-learning models](#machine-learning-models)
 - [Datasets and label definitions](#datasets-and-label-definitions)
-- [How the selected models were trained](#how-the-selected-models-were-trained)
-- [Browser inference and preprocessing](#browser-inference-and-preprocessing)
-- [Recorded validation results](#recorded-validation-results)
-- [Understanding the displayed results](#understanding-the-displayed-results)
+- [Training methodology](#training-methodology)
+- [Inference pipeline](#inference-pipeline)
+- [Evaluation results](#evaluation-results)
+- [Interpreting results](#interpreting-results)
+- [Technology stack](#technology-stack)
 - [Project structure](#project-structure)
-- [Model provenance and export](#model-provenance-and-export)
-- [Verification and limitations](#verification-and-limitations)
+- [Local setup and deployment](#local-setup-and-deployment)
+- [Model artifacts and reproducibility](#model-artifacts-and-reproducibility)
+- [Validation status and limitations](#validation-status-and-limitations)
 - [Dataset references and licensing](#dataset-references-and-licensing)
 
-## Run the application
+## Key capabilities
 
-### Requirements
+- **Damage segmentation:** assign each image pixel to background or one of eight visible damage categories.
+- **Crack classification:** estimate crack presence using a dedicated binary image classifier and a recorded decision threshold.
+- **Damage-level classification:** predict Undamaged, Minor, Moderate or Heavy from a separately trained image classifier.
+- **Interactive inspection:** select, drop or paste a photograph, or use one of three bundled examples. Accepted images are analyzed automatically.
+- **Visual analysis:** compare Photo, Damage and Mask views, adjust overlay strength, inspect the color legend and download a class-ID mask.
+- **Result summary:** view the damage-level label, crack decision, image-coverage headline and damage-level score distribution.
 
-- Node.js **20.19 or later**, as declared in `frontend/package.json`.
-- npm and a browser with WebAssembly, Canvas, `createImageBitmap` and `crypto.randomUUID` support.
-- The model and runtime files in `frontend/public/`; these are included in the repository.
-- Localhost or HTTPS for browser features that require a secure context. Clipboard access also depends on browser permissions.
+The current analysis produces pixel classes and image-level classifications. It does not produce connected-region counts, bounding boxes, geometric measurements or region-specific severity labels. Coverage and display behavior are explained under [Interpreting results](#interpreting-results).
 
-Run from the repository root:
+## Machine-learning models
 
-```bash
-cd frontend
-npm ci
-npm run dev
-```
+The analysis pipeline combines three complementary neural networks, each trained for a distinct task:
 
-Open **http://127.0.0.1:5173**. Wait for all three model-loading indicators to finish, then choose, drop or paste a JPEG/PNG, or select a bundled example image. An accepted image is analyzed automatically.
-
-To check and build the frontend:
-
-```bash
-# Run inside frontend/
-npm run typecheck
-npm run build
-npm run preview
-```
-
-Production preview is available at **http://127.0.0.1:4173**. The build output is `frontend/dist/`.
-
-`predev` and `prebuild` run `scripts/copy-ort.mjs`, copying the installed ONNX Runtime WASM/module files into `public/ort-1220/`. Use `npm ci` with the committed lockfile so the JavaScript package and copied runtime stay aligned.
-
-The current frontend processes image pixels locally and does not call a prediction API or database. Python training packages and raw datasets are unnecessary for running it. The `/api` proxy retained in `vite.config.ts` is not used by the active inference path.
-
-### Static hosting
-
-Build the frontend and serve the **entire** `dist/` directory. Model, runtime and sample assets must remain available at `/models/`, `/ort-1220/` and `/samples/` on the same origin. The current absolute asset paths assume deployment at the site root.
-
-`frontend/vercel.json` configures a Vite build with `dist` output and cache headers for ONNX/runtime assets. When deploying the frontend alone, use **`frontend` as the project root**. No database credentials or backend URL are required by the current browser application.
-
-## What the frontend currently does
-
-- Loads the three ONNX models with individual progress indicators and retries failed model downloads.
-- Accepts file selection, drag-and-drop, clipboard images and three bundled sample photographs.
-- Runs segmentation, crack classification and visible damage-level classification on the same processed image.
-- Displays **Photo**, **Damage** overlay and **Mask** views, overlay strength, fit/full-size viewing and the damage-color legend.
-- Shows the damage-level label, crack decision, an image-coverage headline and a chart of damage-level scores.
-- Creates an in-memory native-grid class-ID PNG that can be downloaded.
-
-Results use temporary `blob:` URLs and an in-memory inspection identifier. Reloading the page discards the result. The current browser path does not save inspection history, compute connected-region counts, extract bounding boxes/geometric features, or produce region-specific severity labels. In its result object, `regions` is empty, `connected_regions` is null and `features` is null.
-
-Image inference stays in the browser application code. Initial page/model/runtime loading still requires asset requests; the page also requests fonts from Google Fonts. This is not a guarantee that a fresh visit works offline.
-
-## Models used by the frontend
-
-These are the **only three models loaded by `frontend/src/local/engine.ts`**:
-
-| Frontend role | Architecture | Training dataset | Model input, NCHW | Source checkpoint | Selected epoch |
+| Task | Architecture | Training dataset | Model input, NCHW | Source checkpoint | Selected epoch |
 |---|---|---|---|---|---:|
 | Damage segmentation | LR-ASPP with MobileNetV3-Large backbone | Curated RC1841 | `1 × 3 × 256 × 256` | `outputs/task09/experiments/lraspp_matched_s42/best.pt` | 21 |
 | Crack presence | ResNet18, two-class head | SDNET2018 | `1 × 3 × 224 × 224` | `outputs/task07/experiments/sdnet_resnet_pilot/best.pt` | 5 |
 | Visible damage level | ResNet18, four-class head | PEER Φ-Net Task 7 | `1 × 3 × 224 × 224` | `outputs/task10/experiments/phi7_resnet18_s42/best.pt` | 16 |
 
-The [model manifest](frontend/public/models/manifest.json) and [browser engine](frontend/src/local/engine.ts) define this inventory.
+Model versions, input dimensions and dataset identities are recorded in the [model manifest](frontend/public/models/manifest.json).
 
 The two ResNet18 models were fine-tuned separately and have different weights and targets. Their outputs are not a shared classifier or a learned fusion of the three datasets. All three see the image independently; the damage-level model receives image pixels, not segmentation areas or extracted RC1841 features.
 
@@ -96,7 +62,7 @@ Training started from torchvision's `LRASPP_MobileNet_V3_Large_Weights.COCO_WITH
 
 ### Classification architectures
 
-Both image classifiers use torchvision ResNet18 initialized from `ResNet18_Weights.IMAGENET1K_V1`. The final linear layer was replaced with two outputs for crack presence and four outputs for Φ-Net damage level. Browser inference loads the exported trained weights directly; it does not obtain pretrained weights or train a model.
+Both image classifiers use torchvision ResNet18 initialized from `ResNet18_Weights.IMAGENET1K_V1`. The final linear layer was replaced with two outputs for crack presence and four outputs for Φ-Net damage level. The application loads the exported fine-tuned weights directly for inference.
 
 ## Datasets and label definitions
 
@@ -117,11 +83,11 @@ The source provides 1,841 concrete photographs with pixel-annotation information
 
 The selected dataset release is **`rc1841-curated-v1-d34771dbb662406a`**. Exclusion reasons include invalid/self-intersecting polygon rings, conflicting cross-class overlaps, out-of-bounds geometry and unresolved exact-image annotation conflicts. Reasons overlap; their individual counts must not be added to infer the number of excluded samples.
 
-Source resolutions vary: the curated dimensions report spans widths **168–4,187** and heights **159–4,160** pixels. Training works at 256 × 256 after cropping/letterboxing; final browser masks are restored to the processed input grid.
+Source resolutions vary: the curated dimensions report spans widths **168–4,187** and heights **159–4,160** pixels. Training works at 256 × 256 after cropping/letterboxing; prediction masks are restored to the processed input grid.
 
 #### Segmentation labels, colors and training imbalance
 
-IDs and RGB values below are the actual frontend palette. Counts are from the selected release's **training partition**; one image may contain several categories.
+IDs and RGB values below are the application's exact visualization palette. Counts are from the selected release's **training partition**; one image may contain several categories.
 
 | ID | Project label | Display RGB | Training images containing class | Native training pixel share |
 |---:|---|---|---:|---:|
@@ -198,11 +164,11 @@ Selected release: **`phi7-aa0dd3b1e24ff2fa`**. The development split uses only o
 
 These numeric IDs are nominal: **ID 0 is Heavy**, whereas segmentation ID 0 is Background and crack-classifier ID 0 is `no_crack`. They must not be interchanged or treated as a common severity scale.
 
-Stored Φ-Net image values support an exact integer-grid inverse after adding channel offsets `[103.939, 116.779, 123.68]`. Training used an inferred Caffe/BGR-to-RGB reconstruction, but the supplied archive did not authenticate that channel convention. The selected model was trained with an explicit provisional acknowledgement; color semantics and source independence remain unresolved. New browser photos are already RGB and do not undergo this array inverse.
+Stored Φ-Net image values support an exact integer-grid inverse after adding channel offsets `[103.939, 116.779, 123.68]`. Training used an inferred Caffe/BGR-to-RGB reconstruction, but the supplied archive did not authenticate that channel convention. The selected model was trained with an explicit provisional acknowledgement; color semantics and source independence remain unresolved. New input photographs are already RGB and do not undergo this array inverse.
 
 Dataset/test sizes here are integrity statistics, not model test-performance results. The three datasets have independent samples and targets; RC1841 masks are not paired training labels for Φ-Net.
 
-## How the selected models were trained
+## Training methodology
 
 Values below come from the selected experiments' saved `run.json`, `status.json` and history, rather than current default configuration files that may describe other runs.
 
@@ -236,9 +202,9 @@ Both classifiers use `N_train / (number_of_classes × training_class_count)` wei
 
 - **Segmentation:** synchronized image/mask geometry, horizontal flip probability 0.5, no vertical flips, and crop probability 0.5. Crops are bounded by the image and use a configured maximum of 512 × 512 source pixels; foreground-guided placement is chosen with probability 0.8 when eligible. Images resize bilinearly and class-ID masks use nearest-neighbor interpolation.
 - **Both classifiers:** full-image letterboxing, horizontal flipping and mild brightness/contrast factors in `[0.9, 1.1]`. No random crop that could remove visible damage while retaining the image-level label.
-- **Browser inference:** deterministic preprocessing plus original/mirrored prediction averaging, described below; training-time random augmentation is not run in the page.
+- **Application inference:** deterministic preprocessing plus original/mirrored prediction averaging, described below; training-time random augmentation is not run in the page.
 
-## Browser inference and preprocessing
+## Inference pipeline
 
 ```mermaid
 flowchart TD
@@ -295,7 +261,7 @@ mean_score[k] = (original_score[k] + mirrored_score[k]) / 2
 
 The crack decision uses `mean_score[1] >= 0.40030238032341003`. The damage-level decision uses the largest of its four averaged scores. Its normalized entropy is computed as `-sum(p * log(p)) / log(4)`; this measures score dispersion, not calibrated correctness or structural risk.
 
-The saved crack threshold was selected using single-view Python validation. Reusing it after mirrored averaging is the implemented browser behavior, but that combination has not been revalidated here.
+The saved crack threshold was selected using single-view Python validation. Reusing it after mirrored averaging is the implemented inference behavior, but that combination has not been revalidated here.
 
 ### Restoring the segmentation mask
 
@@ -303,9 +269,9 @@ The browser removes letterbox padding, bilinearly upsamples the averaged **class
 
 The resulting mask has IDs 0–8 on the processed input grid. Its PNG stores the ID in each RGB channel with opaque alpha; it is not a visualization-color PNG. It may look almost black in a normal image viewer because its channel values only range from 0 to 8. `mask.ts` applies the project palette for display, with background transparent in overlays. Display scaling does not redefine the downloaded mask IDs.
 
-## Recorded validation results
+## Evaluation results
 
-**These are existing Python validation results for the exact source checkpoints shipped to the browser. They are not measurements of the complete browser predictor.** Browser mirrored averaging, score-map restoration and display rules differ from that evaluation. No new training, final-test evaluation or browser-quality benchmark was run for this README.
+**The following results come from the saved validation reports for the project's three trained checkpoints.** The application adds mirrored prediction averaging and score-map restoration that differ from the Python evaluation protocol. These are checkpoint-validation results; equivalent metrics for the complete deployed pipeline have not been established.
 
 Validation was also used for checkpoint/threshold selection, so these values are development results, not an unbiased generalization estimate.
 
@@ -377,7 +343,7 @@ Moderate damage has the lowest class F1 in this validation report. A high score 
 
 Raw datasets, PyTorch checkpoints and generated reports are kept out of Git under `data/` and `outputs/`. These report paths describe locally available training evidence; a fresh clone contains the shipped ONNX assets and the README's recorded summary, not those ignored artifacts.
 
-## Understanding the displayed results
+## Interpreting results
 
 The application combines model outputs in the interface, but it does not train a model that fuses their predictions into one engineering assessment.
 
@@ -399,13 +365,26 @@ A current presentation rule overrides that headline: when the damage-level model
 - The normal four-class chart shows rounded averaged softmax scores, **not calibrated probabilities**. Bars have a minimum drawn height of 6%, so low-score bar heights are not strictly proportional; numeric labels carry the rounded scores.
 - The normal crack label comes from the ResNet18 threshold. The card also contains a fallback based on combined crack-mask coverage of at least 0.25% if a classification result is absent; that is a UI heuristic, not another trained crack model.
 - If severity is unavailable, the chart's fallback uses detected-class coverage or a default profile. Those fallback chart values must not be treated as a Φ-Net prediction. The current normal analysis path returns all three model results together or reports an error.
-- `ClassifierResults.tsx` contains a supplementary uncalibrated-score/provenance panel. The completed result card currently does not wire its `onOpenDetails` callback, so that panel should not be advertised as an accessible completed-result workflow.
 
 The loading animation also enforces a minimum **2.2-second** analyzing display. The time a user sees on screen is not a pure inference benchmark.
 
+## Technology stack
+
+| Layer | Technologies and purpose |
+|---|---|
+| Model development | Python, PyTorch and torchvision for supervised transfer learning |
+| Dataset processing | NumPy and Pillow for annotation/mask handling, validation and preprocessing |
+| Model distribution | ONNX opset 17, versioned model files and a provenance manifest |
+| Inference runtime | ONNX Runtime Web with single-threaded CPU WebAssembly execution |
+| Application | React 19, TypeScript and Vite |
+| Visualization | Canvas for aligned image/mask views; Recharts for score distributions |
+| Deployment | Vercel static hosting with cached model/runtime assets |
+
+Training and evaluation use the Python pipeline. The deployed application loads the trained ONNX graphs and processes images locally. Results remain in memory for the current session; reloading discards them. Initial use still downloads application/model/runtime assets, and the page requests Google Fonts.
+
 ## Project structure
 
-The following files implement or document the frontend's actual models:
+The repository separates dataset preparation and model development from application inference and visualization:
 
 ```text
 frontend/
@@ -447,11 +426,51 @@ src/damage_analytics/task09/      Selected segmentation architecture and trainin
 src/damage_analytics/task10/      Selected damage-level dataset, model and training
 ```
 
-Configuration files are defaults. The selected runs' saved metadata are authoritative for the actual epoch budgets, preprocessing and weights summarized above. The broader repository retains research infrastructure; its mere presence does not imply it is called by the frontend.
+Configuration files contain development defaults. Saved experiment metadata are authoritative for the actual training settings, dataset versions and selected checkpoints summarized above.
 
-## Model provenance and export
+## Local setup and deployment
 
-`frontend/public/models/manifest.json` is the browser's model inventory:
+### Requirements
+
+- Node.js **20.19 or later**, as declared in `frontend/package.json`.
+- npm and a browser with WebAssembly, Canvas, `createImageBitmap` and `crypto.randomUUID` support.
+- The model and runtime files in `frontend/public/`; these are included in the repository.
+- Localhost or HTTPS for browser features that require a secure context. Clipboard access also depends on browser permissions.
+
+Run from the repository root:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Open **http://127.0.0.1:5173**. Wait for all three model-loading indicators to finish, then choose, drop or paste a JPEG/PNG, or select a bundled example image. An accepted image is analyzed automatically.
+
+To check and build the application:
+
+```bash
+# Run inside frontend/
+npm run typecheck
+npm run build
+npm run preview
+```
+
+Production preview is available at **http://127.0.0.1:4173**. The build output is `frontend/dist/`.
+
+`predev` and `prebuild` run `scripts/copy-ort.mjs`, copying the installed ONNX Runtime WASM/module files into `public/ort-1220/`. Use `npm ci` with the committed lockfile so the JavaScript package and copied runtime stay aligned.
+
+Image inference runs locally using ONNX Runtime WebAssembly. Running the application does not require the Python training environment, raw datasets, a prediction API or a database.
+
+### Static hosting
+
+Build the application and serve the **entire** `dist/` directory. Model, runtime and sample assets must remain available at `/models/`, `/ort-1220/` and `/samples/` on the same origin. The current absolute asset paths assume deployment at the site root.
+
+`frontend/vercel.json` configures a Vite build with `dist` output and cache headers for ONNX/runtime assets. Use **`frontend` as the deployment project root**. No database credentials or prediction-service URL are required.
+
+## Model artifacts and reproducibility
+
+The trained models are distributed as fixed-shape ONNX graphs. Their file names, sizes, training provenance and normalization settings are recorded in `frontend/public/models/manifest.json`:
 
 | Role | Served ONNX file | ONNX size |
 |---|---|---:|
@@ -480,13 +499,13 @@ Re-export is unnecessary for running the included application. For maintainers w
 PYTHONPATH=src python deploy/export_onnx.py outputs/onnx_export_review
 ```
 
-The script deletes existing `*.onnx` files in its destination before exporting, so do not point it at the active model directory casually. Review the new models/manifest before replacing browser assets. The frontend's `npm ci` does not install Python export dependencies, and Python dependency installation alone is not evidence of inference parity.
+The script deletes existing `*.onnx` files in its destination before exporting, so do not point it at the active model directory casually. Review the new models and manifest before replacing application assets. `npm ci` does not install Python export dependencies, and Python dependency installation alone is not evidence of inference parity.
 
-## Verification and limitations
+## Validation status and limitations
 
-For this README update, the current frontend passed **TypeScript checking and a Vite production build** with the installed dependencies. Vite reported a large JavaScript chunk warning. The three ONNX sizes/content-hash filenames and their manifest associations were checked, and training/data numbers were read from the selected releases and experiment reports.
+The application has passed **TypeScript checking and a Vite production build** with the installed dependencies; Vite reports a large JavaScript chunk warning. Model asset sizes/content-hash filenames and manifest associations have been checked against the local files. Dataset statistics and training results are taken from versioned releases and saved experiment reports.
 
-No new training, package installation, ONNX re-export, browser image-inference benchmark, final-test evaluation or deployment verification was performed for this documentation update. The historical validation tables above remain distinct from current browser-model performance.
+The validation tables above do not establish end-to-end deployed-model accuracy. Mirrored averaging, browser pixel processing and score restoration require a separate evaluation under the deployed protocol before making equivalent performance claims.
 
 The principal limits are:
 
