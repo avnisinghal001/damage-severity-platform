@@ -1,931 +1,507 @@
-# Damage Analytics and Severity Prediction Platform
+# Concrete — Damage Analytics and Severity Prediction Platform
 
-**Integrated application (Task 12):** FastAPI now connects the selected Task 09 LR-ASPP,
-Task 07 crack ResNet18, an independent Φ-Net severity HTTP service, PostgreSQL and the
-React dashboard with saved-inspection history. See [Task 12 launch and verification](docs/task12.md)
-for exact Mac/Docker commands, checkpoint pins, migrations and actual test results.
-Predictions remain uncalibrated image/component observations, not structural safety scores.
+A browser-based research application for inspecting visible damage in concrete photographs. **Three trained neural networks run locally in the browser** to produce a nine-class segmentation mask, a crack/no-crack decision, and a four-class visible damage-level prediction.
 
-Task 01 provides the dataset foundation for future concrete damage research:
-safe ingestion, validation, exploratory analysis, and sample visualization.
-It does not train models, infer severity, or implement an API or frontend.
+The interface uses React, TypeScript and Vite. The trained models are packaged as ONNX files and executed with ONNX Runtime WebAssembly. This README describes the models and behavior used by the **current frontend**, together with the training data and evidence behind those specific checkpoints.
 
-Task 02 adds explicit polygon/image cleaning policies, exact and near-duplicate
-evidence, conservative grouping, reproducible multi-label splits, and verified,
-immutable dataset releases. Start with the [Task 02 workflow](#task-02-curation-and-splitting)
-or the [beginner lesson](docs/learning/task_02.md). A technically valid release does
-not prove expert annotation correctness or absence of unknown-source leakage.
+> Predictions describe visible image patterns. Confidence is uncalibrated, image coverage is not physical surface area, and component damage labels are not a structural safety assessment.
 
-Task 03 adds a from-scratch PyTorch U-Net and a version-pinned training/evaluation
-workflow. See [Task 03 commands](#task-03-semantic-segmentation) and the complete
-[training lesson and viva guide](docs/learning/task_03.md). Its original implementation
-had no PyTorch runtime; a baseline was subsequently trained and its final test executed.
-**That used test is excluded from Task 04 selection and iterative comparisons.**
-Task 04 adds [controlled improvements and scoped region analytics](#task-04-improvements-and-damage-analytics).
-Task 05 adds [FastAPI model serving and PostgreSQL persistence](#task-05-fastapi-backend).
+## Contents
 
-The [RC1841 source](https://data.mendeley.com/datasets/yfhwfcrfmk/1)
-(DOI: `10.17632/yfhwfcrfmk.1`) describes damage segmentation.
-**The actual supplied label archive contains JSON polygons, not raster masks.**
-This project preserves the eight labels found in those files and derives masks.
-Damage categories are not an independently validated severity target.
-See [dataset evidence and limitations](docs/dataset.md) before using the results.
+- [Run the application](#run-the-application)
+- [What the frontend currently does](#what-the-frontend-currently-does)
+- [Models used by the frontend](#models-used-by-the-frontend)
+- [Datasets and label definitions](#datasets-and-label-definitions)
+- [How the selected models were trained](#how-the-selected-models-were-trained)
+- [Browser inference and preprocessing](#browser-inference-and-preprocessing)
+- [Recorded validation results](#recorded-validation-results)
+- [Understanding the displayed results](#understanding-the-displayed-results)
+- [Project structure](#project-structure)
+- [Model provenance and export](#model-provenance-and-export)
+- [Verification and limitations](#verification-and-limitations)
+- [Dataset references and licensing](#dataset-references-and-licensing)
+
+## Run the application
+
+### Requirements
+
+- Node.js **20.19 or later**, as declared in `frontend/package.json`.
+- npm and a browser with WebAssembly, Canvas, `createImageBitmap` and `crypto.randomUUID` support.
+- The model and runtime files in `frontend/public/`; these are included in the repository.
+- Localhost or HTTPS for browser features that require a secure context. Clipboard access also depends on browser permissions.
+
+Run from the repository root:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Open **http://127.0.0.1:5173**. Wait for all three model-loading indicators to finish, then choose, drop or paste a JPEG/PNG, or select a bundled example image. An accepted image is analyzed automatically.
+
+To check and build the frontend:
+
+```bash
+# Run inside frontend/
+npm run typecheck
+npm run build
+npm run preview
+```
+
+Production preview is available at **http://127.0.0.1:4173**. The build output is `frontend/dist/`.
+
+`predev` and `prebuild` run `scripts/copy-ort.mjs`, copying the installed ONNX Runtime WASM/module files into `public/ort-1220/`. Use `npm ci` with the committed lockfile so the JavaScript package and copied runtime stay aligned.
+
+The current frontend processes image pixels locally and does not call a prediction API or database. Python training packages and raw datasets are unnecessary for running it. The `/api` proxy retained in `vite.config.ts` is not used by the active inference path.
+
+### Static hosting
+
+Build the frontend and serve the **entire** `dist/` directory. Model, runtime and sample assets must remain available at `/models/`, `/ort-1220/` and `/samples/` on the same origin. The current absolute asset paths assume deployment at the site root.
+
+`frontend/vercel.json` configures a Vite build with `dist` output and cache headers for ONNX/runtime assets. When deploying the frontend alone, use **`frontend` as the project root**. No database credentials or backend URL are required by the current browser application.
+
+## What the frontend currently does
+
+- Loads the three ONNX models with individual progress indicators and retries failed model downloads.
+- Accepts file selection, drag-and-drop, clipboard images and three bundled sample photographs.
+- Runs segmentation, crack classification and visible damage-level classification on the same processed image.
+- Displays **Photo**, **Damage** overlay and **Mask** views, overlay strength, fit/full-size viewing and the damage-color legend.
+- Shows the damage-level label, crack decision, an image-coverage headline and a chart of damage-level scores.
+- Creates an in-memory native-grid class-ID PNG that can be downloaded.
+
+Results use temporary `blob:` URLs and an in-memory inspection identifier. Reloading the page discards the result. The current browser path does not save inspection history, compute connected-region counts, extract bounding boxes/geometric features, or produce region-specific severity labels. In its result object, `regions` is empty, `connected_regions` is null and `features` is null.
+
+Image inference stays in the browser application code. Initial page/model/runtime loading still requires asset requests; the page also requests fonts from Google Fonts. This is not a guarantee that a fresh visit works offline.
+
+## Models used by the frontend
+
+These are the **only three models loaded by `frontend/src/local/engine.ts`**:
+
+| Frontend role | Architecture | Training dataset | Model input, NCHW | Source checkpoint | Selected epoch |
+|---|---|---|---|---|---:|
+| Damage segmentation | LR-ASPP with MobileNetV3-Large backbone | Curated RC1841 | `1 × 3 × 256 × 256` | `outputs/task09/experiments/lraspp_matched_s42/best.pt` | 21 |
+| Crack presence | ResNet18, two-class head | SDNET2018 | `1 × 3 × 224 × 224` | `outputs/task07/experiments/sdnet_resnet_pilot/best.pt` | 5 |
+| Visible damage level | ResNet18, four-class head | PEER Φ-Net Task 7 | `1 × 3 × 224 × 224` | `outputs/task10/experiments/phi7_resnet18_s42/best.pt` | 16 |
+
+The [model manifest](frontend/public/models/manifest.json) and [browser engine](frontend/src/local/engine.ts) define this inventory.
+
+The two ResNet18 models were fine-tuned separately and have different weights and targets. Their outputs are not a shared classifier or a learned fusion of the three datasets. All three see the image independently; the damage-level model receives image pixels, not segmentation areas or extracted RC1841 features.
+
+### Segmentation architecture
+
+LR-ASPP is a lightweight semantic-segmentation network: its MobileNetV3-Large backbone extracts image features and its low/high-resolution classifier heads produce nine per-pixel scores. Both heads were adapted to the project's nine labels. The selected run records **3,219,498 parameters**.
+
+Training started from torchvision's `LRASPP_MobileNet_V3_Large_Weights.COCO_WITH_VOC_LABELS_V1`. These are initialization weights; the deployed graph contains the fine-tuned RC1841 weights. Batch-normalization running statistics were frozen during fine-tuning, while affine parameters remained trainable.
+
+### Classification architectures
+
+Both image classifiers use torchvision ResNet18 initialized from `ResNet18_Weights.IMAGENET1K_V1`. The final linear layer was replaced with two outputs for crack presence and four outputs for Φ-Net damage level. Browser inference loads the exported trained weights directly; it does not obtain pretrained weights or train a model.
+
+## Datasets and label definitions
+
+### 1. RC1841 — segmentation
+
+**Source:** [Reinforced concrete structure segmentation dataset 1841, Mendeley Data, version 1](https://data.mendeley.com/datasets/yfhwfcrfmk/1), DOI **10.17632/yfhwfcrfmk.1**.
+
+The source provides 1,841 concrete photographs with pixel-annotation information for eight damage categories. In this project, image–JSON polygon pairs were validated and rasterized into class-ID masks for supervised segmentation.
+
+| Local preparation statistic | Count |
+|---|---:|
+| Original image–annotation pairs | 1,841 |
+| Included curated pairs | 1,617 |
+| Excluded pairs | 224 |
+| Training | 1,132 |
+| Validation | 243 |
+| Frozen test | 242 |
+
+The selected dataset release is **`rc1841-curated-v1-d34771dbb662406a`**. Exclusion reasons include invalid/self-intersecting polygon rings, conflicting cross-class overlaps, out-of-bounds geometry and unresolved exact-image annotation conflicts. Reasons overlap; their individual counts must not be added to infer the number of excluded samples.
+
+Source resolutions vary: the curated dimensions report spans widths **168–4,187** and heights **159–4,160** pixels. Training works at 256 × 256 after cropping/letterboxing; final browser masks are restored to the processed input grid.
+
+#### Segmentation labels, colors and training imbalance
+
+IDs and RGB values below are the actual frontend palette. Counts are from the selected release's **training partition**; one image may contain several categories.
+
+| ID | Project label | Display RGB | Training images containing class | Native training pixel share |
+|---:|---|---|---:|---:|
+| 0 | Background | `128, 128, 128` | 1,132 | 71.409% |
+| 1 | Microcrack | `230, 40, 40` | 187 | 0.132% |
+| 2 | Structural crack | `40, 180, 60` | 511 | 1.263% |
+| 3 | Minor spalling | `40, 210, 210` | 54 | 0.060% |
+| 4 | Moderate spalling | `130, 70, 170` | 78 | 1.870% |
+| 5 | Delamination | `245, 140, 30` | 106 | 3.155% |
+| 6 | Rebar corrosion | `240, 215, 50` | 340 | 19.246% |
+| 7 | Concrete crushing | `50, 90, 220` | 30 | 1.193% |
+| 8 | Structural deformation | `230, 60, 200` | 32 | 1.672% |
+
+`Microcrack` and `Delamination` are the retained project/source-annotation strings. The publisher describes corresponding categories as non-structural cracks and major spalling/delamination; exact semantic equivalence remains an annotation limitation. The README does not rename or merge trained classes.
+
+Background means pixels outside the annotated foreground categories. It is not a concrete/non-concrete label or proof of an undamaged structure. The curated release contains **zero images with zero foreground annotations**, so this segmentation dataset does not provide a dedicated set of fully negative/undamaged photographs.
+
+Splits preserve known duplicate/candidate grouping evidence, but authenticated physical-structure identities are unavailable. Heuristic grouping and annotation checks do not establish complete leakage freedom or expert-confirmed ground truth.
+
+### 2. SDNET2018 — crack/no-crack classification
+
+**Source:** [Utah State University's SDNET2018 dataset](https://digitalcommons.usu.edu/all_datasets/48/), DOI **10.15142/T3TD19**.
+
+SDNET2018 contains concrete surface patches from bridge decks, walls and pavements. The publisher describes 256 × 256 patches derived from 230 larger photographs, with crack/no-crack image labels and challenging visual obstructions. These labels supervise the ResNet18 **crack-presence** head.
+
+| Local preparation statistic | Count |
+|---|---:|
+| Discovered images | 56,092 |
+| Excluded exact-image records with conflicting targets | 4 |
+| Included images | 56,088 |
+| Training | 39,252 |
+| Validation | 8,530 |
+| Frozen test | 8,306 |
+
+Selected release: **`sdnet2018-a52402f4884726cc`**.
+
+| ID | Label | Training | Validation | Frozen test |
+|---:|---|---:|---:|---:|
+| 0 | `no_crack` | 33,302 | 7,255 | 7,049 |
+| 1 | `crack` | 5,950 | 1,275 | 1,257 |
+
+The release uses candidate source-prefix/duplicate components to reduce crop leakage between partitions. These are evidence groups, not authenticated photo/structure identities; its quality report does not certify final-evaluation eligibility.
+
+A `no_crack` label means no crack under this dataset's image label. It does not establish absence of corrosion, spalling or other damage. SDNET does not train the application to recognize every unrelated photograph, and whole-photo browser inference differs from the patch distribution used for training.
+
+### 3. PEER Φ-Net Task 7 — visible damage level
+
+**Source:** [PEER Φ-Net Task 7 definitions](https://apps.peer.berkeley.edu/phi-net/detection-tasks/) and [official download page](https://apps.peer.berkeley.edu/phi-net/download/).
+
+Task 7 assigns four qualitative damage levels to pixel/object-level structural imagery. Minor describes limited visible cracking/spalling; Moderate describes more extensive patterns; Heavy represents extensive visible component damage. This is an image/component target, not a whole-building safety or collapse assessment.
+
+The local archive contains four float32 NumPy tensors: training/test images and their four-column one-hot labels. Image tensors are **224 × 224 × 3**; pairs are identified by official partition and array index. Original source-photo/crop-parent identities are not provided.
+
+| Local preparation statistic | Count |
+|---|---:|
+| Original official training rows | 4,138 |
+| Original official test rows | 498 |
+| Total rows | 4,636 |
+| Training rows quarantined as test-related candidates | 23 |
+| Prepared training | 3,292 |
+| Prepared validation | 823 |
+| Official test, preserved unchanged | 498 |
+
+Selected release: **`phi7-aa0dd3b1e24ff2fa`**. The development split uses only official training rows. Screening identified 119 unresolved visual candidate pairs, including 23 across the official partition boundary. Test-related training rows were conservatively quarantined; candidates were not declared human-confirmed duplicates.
+
+**Preserved source registration:**
+
+| ID | Label | Prepared training | Validation | Official test | Quarantined training |
+|---:|---|---:|---:|---:|---:|
+| 0 | Heavy | 724 | 181 | 94 | 14 |
+| 1 | Minor | 692 | 173 | 93 | 4 |
+| 2 | Moderate | 635 | 159 | 104 | 5 |
+| 3 | Undamaged | 1,241 | 310 | 207 | 0 |
+
+These numeric IDs are nominal: **ID 0 is Heavy**, whereas segmentation ID 0 is Background and crack-classifier ID 0 is `no_crack`. They must not be interchanged or treated as a common severity scale.
+
+Stored Φ-Net image values support an exact integer-grid inverse after adding channel offsets `[103.939, 116.779, 123.68]`. Training used an inferred Caffe/BGR-to-RGB reconstruction, but the supplied archive did not authenticate that channel convention. The selected model was trained with an explicit provisional acknowledgement; color semantics and source independence remain unresolved. New browser photos are already RGB and do not undergo this array inverse.
+
+Dataset/test sizes here are integrity statistics, not model test-performance results. The three datasets have independent samples and targets; RC1841 masks are not paired training labels for Φ-Net.
+
+## How the selected models were trained
+
+Values below come from the selected experiments' saved `run.json`, `status.json` and history, rather than current default configuration files that may describe other runs.
+
+| Setting | Segmentation LR-ASPP | Crack ResNet18 | Damage-level ResNet18 |
+|---|---|---|---|
+| Seed | 42 | 42 | 42 |
+| Training device recorded | Apple MPS | Apple MPS | Apple MPS |
+| Optimizer | AdamW | AdamW | AdamW |
+| Initial learning rate | 0.0003 | 0.0003 | 0.0003 |
+| Weight decay | 0.0001 | 0.0001 | 0.0001 |
+| Batch size | 4 | 32 | 32 |
+| Epoch budget | 25 | 5 | 25 |
+| Epochs completed | 25 | 5 | 22 |
+| Best checkpoint epoch | 21 | 5 | 16 |
+| Learning-rate schedule | Constant in selected training loop | Cosine | Cosine |
+| Early-stopping patience | 8 validation checks | 6 | 6 |
+| Minimum significant improvement | 0.0001 | 0.0001 | 0.0001 |
+| Checkpoint selection | Validation foreground mIoU | Validation ROC-AUC | Validation macro-F1 |
+| Gradient clipping, global norm | 1.0 | 1.0 | 1.0 |
+| DataLoader workers | 0 | 0 | 0 |
+| Class weighting | Training-pixel inverse square root, cap 10 | Training-label balanced weights | Training-label balanced weights |
+| Loss | Weighted CE + 0.5 × foreground soft Dice | Weighted cross-entropy | Weighted cross-entropy |
+
+Seeds and run settings are recorded, but training used `deterministic=False` for MPS compatibility; bitwise equivalence across devices/library versions is not established.
+
+For segmentation, padding is ignored in supervised loss, and Dice averages foreground classes present in the batch. Pixel weights come from native training masks; cropping/resizing can change the effective sampled class distribution. The foreground mean excludes class 0.
+
+Both classifiers use `N_train / (number_of_classes × training_class_count)` weights. No validation/test labels supply those weights. The crack weights are approximately `[0.589334, 3.298487]`; damage-level weights in source-ID order are `[1.136740, 1.189306, 1.296063, 0.663175]`. After choosing the crack checkpoint by validation ROC-AUC, its threshold was selected once to maximize balanced accuracy on the same SDNET validation partition.
+
+### Training augmentation
+
+- **Segmentation:** synchronized image/mask geometry, horizontal flip probability 0.5, no vertical flips, and crop probability 0.5. Crops are bounded by the image and use a configured maximum of 512 × 512 source pixels; foreground-guided placement is chosen with probability 0.8 when eligible. Images resize bilinearly and class-ID masks use nearest-neighbor interpolation.
+- **Both classifiers:** full-image letterboxing, horizontal flipping and mild brightness/contrast factors in `[0.9, 1.1]`. No random crop that could remove visible damage while retaining the image-level label.
+- **Browser inference:** deterministic preprocessing plus original/mirrored prediction averaging, described below; training-time random augmentation is not run in the page.
+
+## Browser inference and preprocessing
+
+```mermaid
+flowchart TD
+    A[Select, drop, paste or sample image] --> B[Decode, orient, flatten transparency and obtain RGB]
+    B --> C[Segmentation letterbox: 256 x 256]
+    B --> D[Classification letterbox: 224 x 224]
+    C --> E[LR-ASPP: original and mirrored image]
+    D --> F[Crack ResNet18: original and mirrored image]
+    D --> G[Damage-level ResNet18: original and mirrored image]
+    E --> H[Unmirror and average class probabilities]
+    H --> I[Unpad, bilinearly restore scores, then argmax]
+    I --> J[Native-grid IDs, pixel counts and mask PNG]
+    F --> K[Average softmax and apply saved crack threshold]
+    G --> L[Average softmax and select damage-level argmax]
+    J --> M[Canvas viewer and result card]
+    K --> M
+    L --> M
+```
+
+### Input handling
+
+Direct file validation checks JPEG/PNG signatures, declared MIME consistency, nonempty data and a **10 MiB** limit. Browser decoding applies image orientation; the analysis path rejects images over **12,000,000 pixels** or a dimension over **8,192 pixels**. Transparency is flattened onto white before RGB inference.
+
+Clipboard preparation has a separate policy: flatten the image, scale it to at most **4,000,000 pixels** and dimension 8,192, then re-encode as JPEG at quality 0.95. Consequently, “native resolution” for a pasted image means this processed input grid, not necessarily the original clipboard dimensions or lossless pixels.
+
+### Numeric preprocessing
+
+All inputs become float32 NCHW tensors. RGB channels are scaled by 255 and normalized with:
+
+```text
+mean = [0.485, 0.456, 0.406]
+std  = [0.229, 0.224, 0.225]
+normalized_channel = (pixel / 255 - mean[channel]) / std[channel]
+```
+
+| Operation | Segmentation | Both classifiers |
+|---|---|---|
+| Target shape | 256 × 256 | 224 × 224 |
+| Aspect ratio | Preserved by resize and centered padding | Preserved by resize and centered padding |
+| Resize implementation | JavaScript separable bilinear resampling | Same JavaScript bilinear resampling |
+| Padding | Zero in normalized tensor space | Rounded ImageNet mean-color bytes, then normalized |
+| Rounding | Python-style ties-to-even helper | Same ties-to-even helper |
+
+The JavaScript resize is designed to resemble Pillow's two-pass bilinear filtering with an 8-bit intermediate. That implementation intent is not evidence of bitwise parity across all browser decoders, image profiles, Pillow versions and image sizes.
+
+### Mirrored prediction averaging
+
+Every model sees both the original input tensor and its horizontal mirror: **six forward passes per image**. For classifiers, two softmax vectors are averaged. For segmentation, the mirrored class-probability maps are flipped back before averaging.
+
+```text
+softmax(z)[k] = exp(z[k] - max(z)) / sum_j exp(z[j] - max(z))
+mean_score[k] = (original_score[k] + mirrored_score[k]) / 2
+```
+
+The crack decision uses `mean_score[1] >= 0.40030238032341003`. The damage-level decision uses the largest of its four averaged scores. Its normalized entropy is computed as `-sum(p * log(p)) / log(4)`; this measures score dispersion, not calibrated correctness or structural risk.
+
+The saved crack threshold was selected using single-view Python validation. Reusing it after mirrored averaging is the implemented browser behavior, but that combination has not been revalidated here.
+
+### Restoring the segmentation mask
+
+The browser removes letterbox padding, bilinearly upsamples the averaged **class scores**, then takes the per-pixel argmax at input resolution. This differs from the saved Python validation protocol, which takes argmax first and restores integer IDs with nearest-neighbor interpolation.
+
+The resulting mask has IDs 0–8 on the processed input grid. Its PNG stores the ID in each RGB channel with opaque alpha; it is not a visualization-color PNG. It may look almost black in a normal image viewer because its channel values only range from 0 to 8. `mask.ts` applies the project palette for display, with background transparent in overlays. Display scaling does not redefine the downloaded mask IDs.
+
+## Recorded validation results
+
+**These are existing Python validation results for the exact source checkpoints shipped to the browser. They are not measurements of the complete browser predictor.** Browser mirrored averaging, score-map restoration and display rules differ from that evaluation. No new training, final-test evaluation or browser-quality benchmark was run for this README.
+
+Validation was also used for checkpoint/threshold selection, so these values are development results, not an unbiased generalization estimate.
+
+IoU and Dice measure predicted/annotated mask overlap. Precision measures the correctness of positive predictions; recall measures how much labeled damage is recovered. Macro-F1 gives each class equal weight, while balanced accuracy averages class recall. ROC-AUC and PR-AUC describe score ranking across thresholds; threshold-dependent metrics describe the saved operating point. All percentages below are rounded from the saved reports.
+
+### Segmentation: RC1841 validation, 243 images
+
+- **Foreground mIoU: 41.55%** across damage classes.
+- **All-class mean IoU: 47.40%.**
+- **Pixel accuracy: 90.54%.** Background dominance makes accuracy alone insufficient.
+
+Per-class values are percentages:
+
+| ID | Class | IoU | Dice | Precision | Recall |
+|---:|---|---:|---:|---:|---:|
+| 0 | Background | 94.22 | 97.02 | 97.82 | 96.24 |
+| 1 | Microcrack | 25.85 | 41.08 | 32.98 | 54.46 |
+| 2 | Structural crack | 48.57 | 65.38 | 50.99 | 91.08 |
+| 3 | Minor spalling | 26.38 | 41.75 | 36.06 | 49.57 |
+| 4 | Moderate spalling | 66.00 | 79.52 | 82.46 | 76.78 |
+| 5 | Delamination | 41.07 | 58.23 | 44.18 | 85.37 |
+| 6 | Rebar corrosion | 69.79 | 82.21 | 87.29 | 77.69 |
+| 7 | Concrete crushing | 35.88 | 52.81 | 85.99 | 38.11 |
+| 8 | Structural deformation | 18.87 | 31.74 | 36.86 | 27.87 |
+
+Structural deformation, microcracks and minor spalling remain difficult classes. Thin features can also be lost at the 256 × 256 working resolution; coarse input resolution is not restored into new visual evidence by upsampling.
+
+Source: `outputs/task09/experiments/lraspp_matched_s42/best_validation_metrics.json`; selected epoch and dataset identity are recorded in the neighboring run/status files.
+
+### Crack presence: SDNET2018 validation, 8,530 patches
+
+| Metric | Recorded value |
+|---|---:|
+| ROC-AUC | 0.9294 |
+| PR-AUC, trapezoidal | 0.8210 |
+| Average precision, step-integrated | 0.8211 |
+| Accuracy at the selected threshold | 89.51% |
+| Balanced accuracy | 86.17% |
+| Macro-F1 | 81.76% |
+| Crack precision | 61.20% |
+| Crack recall | 81.41% |
+| Crack F1 | 69.88% |
+
+Confusion matrix at the saved threshold; rows are truth and columns prediction:
+
+| | Predicted no crack | Predicted crack |
+|---|---:|---:|
+| No crack | 6,597 | 658 |
+| Crack | 237 | 1,038 |
+
+These results describe SDNET validation patches, not arbitrary user photographs. Source: `outputs/task07/experiments/sdnet_resnet_pilot/validation_metrics.json`.
+
+### Visible damage level: Φ-Net validation, 823 images
+
+- **Accuracy: 71.32%.**
+- **Macro-F1: 68.12%.**
+- **Balanced accuracy: 67.53%.**
+
+Per-class values are percentages:
+
+| ID | Class | Validation support | Precision | Recall | F1 |
+|---:|---|---:|---:|---:|---:|
+| 0 | Heavy | 181 | 76.79 | 71.27 | 73.93 |
+| 1 | Minor | 173 | 68.21 | 59.54 | 63.58 |
+| 2 | Moderate | 159 | 54.00 | 50.94 | 52.43 |
+| 3 | Undamaged | 310 | 77.40 | 88.39 | 82.53 |
+
+Moderate damage has the lowest class F1 in this validation report. A high score on one image must not be interpreted as a calibrated probability of correct engineering assessment. Source: `outputs/task10/experiments/phi7_resnet18_s42/validation_metrics.json`.
+
+Raw datasets, PyTorch checkpoints and generated reports are kept out of Git under `data/` and `outputs/`. These report paths describe locally available training evidence; a fresh clone contains the shipped ONNX assets and the README's recorded summary, not those ignored artifacts.
+
+## Understanding the displayed results
+
+The application combines model outputs in the interface, but it does not train a model that fuses their predictions into one engineering assessment.
+
+### Coverage calculation versus display policy
+
+The inference engine counts the segmentation IDs and computes:
+
+```text
+class_image_percent[k] = 100 * count(mask == k) / (image_width * image_height)
+raw_foreground_percent = sum(class_image_percent[1..8])
+```
+
+This is **image-pixel coverage**, including background pixels in the denominator. The result card currently labels the headline “surface area”; that wording does not make it a physical surface measurement. No scale, depth, perspective correction or camera calibration is available.
+
+A current presentation rule overrides that headline: when the damage-level model predicts **Undamaged**, the card displays **0%** and the viewer hides damage/mask highlights. The stored segmentation mask and raw class counts are still generated. Therefore 0% in the card is not always the raw segmentation foreground fraction, and an Undamaged prediction does not prove that every model agrees.
+
+### Score-chart and fallback behavior
+
+- The normal four-class chart shows rounded averaged softmax scores, **not calibrated probabilities**. Bars have a minimum drawn height of 6%, so low-score bar heights are not strictly proportional; numeric labels carry the rounded scores.
+- The normal crack label comes from the ResNet18 threshold. The card also contains a fallback based on combined crack-mask coverage of at least 0.25% if a classification result is absent; that is a UI heuristic, not another trained crack model.
+- If severity is unavailable, the chart's fallback uses detected-class coverage or a default profile. Those fallback chart values must not be treated as a Φ-Net prediction. The current normal analysis path returns all three model results together or reports an error.
+- `ClassifierResults.tsx` contains a supplementary uncalibrated-score/provenance panel. The completed result card currently does not wire its `onOpenDetails` callback, so that panel should not be advertised as an accessible completed-result workflow.
+
+The loading animation also enforces a minimum **2.2-second** analyzing display. The time a user sees on screen is not a pure inference benchmark.
 
 ## Project structure
 
+The following files implement or document the frontend's actual models:
+
 ```text
-damage-severity-platform/
-├── .gitignore
-├── pyproject.toml
-├── README.md
-├── config/
-│   ├── task01.toml
-│   └── task02.toml
+frontend/
 ├── src/
-│   └── damage_analytics/
-│       ├── __init__.py
-│       ├── __main__.py
-│       ├── cli.py
-│       ├── config.py
-│       ├── labels.py
-│       ├── io.py
-│       ├── archives.py
-│       ├── discovery.py
-│       ├── annotations.py
-│       ├── validation.py
-│       ├── analysis.py
-│       └── visualization.py
-│       # Task 02 subpackage is listed below.
-├── tests/
-│   ├── test_archives.py
-│   ├── test_annotations.py
-│   ├── test_config.py
-│   ├── test_discovery.py
-│   └── test_pipeline.py
-│   # Task 02 test files are listed below.
-├── docs/
-│   ├── START_HERE.md
-│   ├── architecture.md
-│   ├── dataset.md
-│   └── learning/
-│       ├── task_01.md
-│       └── task_02.md
-├── data/                          # ignored; supplied/generated locally
-│   ├── raw/rc1841/
-│   │   ├── imagedata.zip
-│   │   └── labeldata.zip
-│   └── interim/rc1841/            # created by ingest
-│       ├── images/               # 1,841 original JPGs in inspected archives
-│       ├── annotations/          # 1,841 original JSON files
-│       └── provenance.json
-└── outputs/task01/               # ignored; see output table below
+│   ├── main.tsx                  React entry point
+│   ├── App.tsx                   Model loading, image analysis and workspace state
+│   ├── local/
+│   │   ├── engine.ts             Three ONNX sessions, six passes, scores and mask output
+│   │   └── preprocess.ts         RGB tensors, bilinear resize, letterbox, flips and restoration
+│   ├── api.ts                    Error helpers and local blob-image decoding
+│   ├── files.ts                  File signatures and clipboard preparation
+│   ├── mask.ts                   ID-mask validation, colors and display layers
+│   ├── palette.ts                Exact nine-class labels/RGB colors
+│   ├── types.ts                  In-memory result contracts
+│   ├── styles.css                Responsive application styling
+│   └── components/
+│       ├── InputPanel.tsx        Upload, drop, paste and sample selection
+│       ├── LoadingScreen.tsx     Per-model loading progress
+│       ├── Scanner.tsx           Analysis animation
+│       ├── SegmentationViewer.tsx Photo/overlay/mask, opacity, zoom and download
+│       ├── ResultCard.tsx        Damage level, crack label, headline coverage and chart
+│       └── ClassifierResults.tsx Supplementary classifier/provenance rendering
+├── public/
+│   ├── models/                   Three trained ONNX files and manifest.json
+│   ├── ort-1220/                 WASM binary and matching module
+│   └── samples/                  Three example input photographs
+├── scripts/copy-ort.mjs          Copies the installed runtime before dev/build
+├── package.json / package-lock.json
+├── vite.config.ts
+└── vercel.json
+
+deploy/export_onnx.py             Offline export of the three selected checkpoints
+config/task12.toml                Source-checkpoint paths and SHA-256 pins
+config/task07.toml                Crack data/training defaults
+config/task09.toml                Segmentation experiment defaults
+config/task10.toml                Φ-Net preparation/training defaults
+src/damage_analytics/task07/      Selected crack model's training infrastructure
+src/damage_analytics/task09/      Selected segmentation architecture and training
+src/damage_analytics/task10/      Selected damage-level dataset, model and training
 ```
 
-OS metadata, environment internals, Git internals, and individual dataset filenames
-are omitted from the tree. No datasets or generated reports belong in Git.
+Configuration files are defaults. The selected runs' saved metadata are authoritative for the actual epoch budgets, preprocessing and weights summarized above. The broader repository retains research infrastructure; its mere presence does not imply it is called by the frontend.
 
-## Setup and complete Task 01 command sequence
+## Model provenance and export
 
-Use Python 3.11 or newer. Run everything from the repository root. These are
-instructions for you to execute; dependency installation was not executed during
-implementation. `pip install -e` makes the `src/` package importable and supplies
-the command-line entrypoint. The `dev` extra includes pytest and Ruff.
+`frontend/public/models/manifest.json` is the browser's model inventory:
+
+| Role | Served ONNX file | ONNX size |
+|---|---|---:|
+| Segmentation | `segmentation.e68a4826ed.onnx` | 12.28 MiB |
+| Crack | `crack.ee1c6dc662.onnx` | 42.63 MiB |
+| Damage level | `severity.c1d68843c2.onnx` | 42.63 MiB |
+
+The graphs total approximately **97.54 MiB**. The supplied WASM binary adds approximately **10.69 MiB**, before the JavaScript UI, runtime module, images and fonts. Initial loading therefore depends substantially on network and device resources. Browser sessions use the **WASM CPU execution provider, one thread**; they do not use the Apple MPS training device or WebGPU.
+
+Each manifest `sha256` identifies the **source PyTorch checkpoint**, not the exported ONNX file:
+
+| Role | Source checkpoint SHA-256 |
+|---|---|
+| Segmentation | `8fec529ea706398ce13febafd62856102041d2e1b1628d1eb3062118eae3af76` |
+| Crack | `e1b35d2248fc6ab5575dc01f61943cf981b7ee4b6426d02f1a754e7abf1e1f40` |
+| Damage level | `80ba7257ed74f07cd0eb7adc9612dfe215b78a22697d931e66c444aea061b732` |
+
+The ONNX filename suffix is the first ten characters of that **ONNX file's own content hash**. The browser loader currently does not recompute/verify these hashes; manifest provenance is not runtime cryptographic verification. Model filenames change on export to distinguish changed content from cached assets.
+
+The offline export script loads the three pinned checkpoints, exports fixed-shape **ONNX opset 17** graphs, and contains single-synthetic-input ONNX Runtime/PyTorch parity checks. Those checks do not benchmark or validate the browser's complete decoding, mirrored averaging, score restoration or display policy.
+
+Re-export is unnecessary for running the included application. For maintainers who have the local checkpoints and the Python export dependencies, use a **new output directory** for review:
 
 ```bash
-# 1. Create an environment if you do not already have .venv.
-python3 -m venv .venv
-
-# 2. Activate it (macOS/Linux, bash or zsh).
-source .venv/bin/activate
-
-# 3. Install declared dependencies and the local package.
-python -m pip install -e '.[dev]'
-
-# 4. Prepare the archive location.
-mkdir -p data/raw/rc1841
+# Repository root; requires PyTorch/torchvision and ONNX/ONNX Runtime export dependencies.
+PYTHONPATH=src python deploy/export_onnx.py outputs/onnx_export_review
 ```
 
-Place the two original archives in that folder. They are already present in the
-current workspace. For a fresh clone with archives elsewhere, the optional copy
-commands below prompt for the existing local folder; they do not download data.
+The script deletes existing `*.onnx` files in its destination before exporting, so do not point it at the active model directory casually. Review the new models/manifest before replacing browser assets. The frontend's `npm ci` does not install Python export dependencies, and Python dependency installation alone is not evidence of inference parity.
 
-```bash
-printf 'Folder containing imagedata.zip and labeldata.zip: '
-read -r RC1841_ARCHIVE_DIR
-cp "$RC1841_ARCHIVE_DIR/imagedata.zip" data/raw/rc1841/
-cp "$RC1841_ARCHIVE_DIR/labeldata.zip" data/raw/rc1841/
-```
+## Verification and limitations
 
-Then run the stages separately, in this order:
+For this README update, the current frontend passed **TypeScript checking and a Vite production build** with the installed dependencies. Vite reported a large JavaScript chunk warning. The three ONNX sizes/content-hash filenames and their manifest associations were checked, and training/data numbers were read from the selected releases and experiment reports.
 
-```bash
-# 5. Check archive safety, inventory members, and record SHA-256 hashes.
-python -m damage_analytics inspect
+No new training, package installation, ONNX re-export, browser image-inference benchmark, final-test evaluation or deployment verification was performed for this documentation update. The historical validation tables above remain distinct from current browser-model performance.
 
-# 6. Extract once. Skip if data/interim/rc1841 already exists from a successful ingest.
-python -m damage_analytics ingest
+The principal limits are:
 
-# 7. Validate, derive masks, calculate statistics, and generate plots.
-python -m damage_analytics analyze
+1. **Domain and framing:** arbitrary photographs, distant scenes and non-concrete images are not automatically rejected or validated for these models.
+2. **Independent targets:** segmentation classes, binary cracks and Φ-Net damage levels are not paired labels or interchangeable notions of severity.
+3. **Annotation and provenance uncertainty:** source identities and some category semantics remain unresolved; complete leakage freedom is not established.
+4. **Resolution and imbalance:** rare categories and thin damage patterns have limited support and can be lost during downsampling.
+5. **Browser/evaluation differences:** mirrored averaging, score interpolation and browser pixel processing need their own evaluation before claiming the Python validation scores apply to the page.
+6. **Presentation rules:** Undamaged gating, the “surface area” caption and chart/fallback behavior require careful interpretation as described above.
+7. **Uncalibrated confidence:** softmax, entropy and a displayed damage category do not determine structural capacity, engineering risk or safe occupancy.
 
-# 8. Generate original / mask / overlay examples from valid records.
-python -m damage_analytics visualize
+## Dataset references and licensing
 
-# 9. Run focused tests and lint checks.
-python -m pytest
-python -m ruff check src tests
-```
+- **RC1841:** Jiehui Wang, *Reinforced concrete structure segmentation dataset 1841*, Mendeley Data, version 1. [Dataset and citation details](https://data.mendeley.com/datasets/yfhwfcrfmk/1). The publisher lists **CC BY 4.0**.
+- **SDNET2018:** Maguire, M., Dorafshan, S. and Thomas, R. J. (2018), *SDNET2018: A concrete crack image dataset for machine learning applications*, Utah State University. [Dataset and recommended citation](https://digitalcommons.usu.edu/all_datasets/48/). The publisher lists **CC BY 4.0**.
+- **PEER Φ-Net:** Gao, Y. and Mosalam, K. M., PEER Hub ImageNet. [Task definitions](https://apps.peer.berkeley.edu/phi-net/detection-tasks/) and [download/license information](https://apps.peer.berkeley.edu/phi-net/download/). The download page lists **CC BY-NC-SA 4**.
 
-Windows PowerShell activation: `.venv\Scripts\Activate.ps1`. The remaining Python
-commands are the same; use your shell's file-copy commands for dataset placement.
-
-The current workspace has already completed inspection and ingestion. Repeating
-`ingest` intentionally fails rather than merging or overwriting data. To ingest a
-different archive version, set new extracted/output directories in the configuration.
-To change defaults: `python -m damage_analytics --config config/task01.toml analyze`.
-Paths are relative to `project_root` in that file, never your username or machine.
-
-**Exit codes:** `0` means the stage completed successfully; `2` means invalid
-inputs, a missing dependency, or validation errors. Analysis writes diagnostic
-reports and valid-subset outputs even when validation fails. Inspect `issues.csv`
-and `validation.json`; a plot does not mean the whole dataset passed. The supplied
-annotations include negative coordinates in `crack146` and `damage794`, so a
-nonzero analysis exit is expected under the strict policy. After reviewing that
-failure, `visualize` can illustrate the valid subset. Do not chain these steps
-with `&&` if you intend to inspect a known validation failure.
-
-## Expected outputs
-
-All paths below are relative to `outputs/task01/` unless stated otherwise.
-
-| Output | Contents |
-| --- | --- |
-| `archive_inventory.csv`, `archives.json` | ZIP members, sizes, and original archive hashes |
-| `data/interim/rc1841/provenance.json` | Archive provenance beside extracted originals; outside outputs |
-| `manifest.csv` | Valid image/annotation/derived-mask mappings, dimensions, hashes, overlap counts |
-| `issues.csv`, `validation.json` | Errors, warnings, validation status, class definitions, processing rules |
-| `duplicates.json` | Exact-byte duplicate groups and decoded-image-pixel duplicate groups |
-| `masks/000001.png`, … | Lossless grayscale **class IDs 0–8**, not RGB visualizations |
-| `summary.json` | Dataset aggregates and analysis population |
-| `class_distribution.csv` | Pooled pixels, pixel fractions, image presence, polygon counts |
-| `dimensions.csv`, `per_image.csv` | Dimension frequencies and per-image statistics |
-| `plots/class_pixels.png` | Pixel fractions including background |
-| `plots/category_frequency.png` | Images with each source annotation label |
-| `plots/image_dimensions.png` | Stored width/height scatter plot |
-| `sample_gallery.png`, `gallery_samples.json` | Reproducible examples, legend, and selected sample IDs |
-
-Reports describe valid pairs only; duplicates remain counted. Mask numbers follow
-sorted discovered-pair order, so use `manifest.csv` instead of guessing filenames.
-Unused masks from earlier runs may remain; only current manifest entries are
-authoritative. Analysis invalidates earlier plots and galleries before regenerating
-outputs. Commands operate on one output directory at a time; concurrent runs sharing
-that directory are not supported.
-
-## Implementation verification and next step
-
-During the first Task 01 implementation, no packages or datasets were installed or
-downloaded, and dependency-free verification passed 16 tests with 6 skipped. The
-environment subsequently acquired the declared dependencies outside that implementation.
-Task 01 reports now exist: 1,810 pairs passed its original policies and 31 failed.
-The Task 02 verification below includes all Task 01 regression tests with no skips.
-
-Next: resolve/document invalid polygons and label terminology, visually review masks,
-and design duplicate-aware, source-group-aware train/validation/test splits. Establish
-expert-defined, independently annotated severity targets before planning severity
-prediction. See [START_HERE](docs/START_HERE.md), [architecture](docs/architecture.md),
-and the complete [Task 01 lesson](docs/learning/task_01.md).
-
-## Task 02 curation and splitting
-
-Task 02 reads the existing archives, extracted originals, and Task 01 reports. It
-never writes into them. Configuration lives in `config/task02.toml`, which reuses
-Task 01's input paths. No additional runtime dependencies are needed.
-
-Run these commands from the repository root, in order. Installation commands below
-are for the user to execute; the implementation did not run installation/downloads.
-The current workspace already has `.venv`, archives, extracted data, and Task 01
-reports, so skip creation/placement/ingestion steps that are already complete.
-
-```bash
-# 1. Create only when .venv does not exist; activate your environment.
-if [ ! -d .venv ]; then
-    python3 -m venv .venv
-fi
-source .venv/bin/activate
-
-# 2. Install only when permitted/needed. Not executed during implementation.
-python -m pip install -e '.[dev]'
-
-# 3. Both original ZIPs must be in data/raw/rc1841/.
-mkdir -p data/raw/rc1841
-# If absent, use the local archive copy commands in the Task 01 setup above.
-
-# 4. Inspect, and extract only if a completed extraction does not exist.
-python -m damage_analytics inspect
-if [ ! -d data/interim/rc1841 ]; then
-    python -m damage_analytics ingest
-fi
-
-# 5. Produce Task 01 evidence only if it is missing.
-# Known source errors make this stage exit 2; review reports and continue to curation.
-if [ ! -f outputs/task01/validation.json ]; then
-    python -m damage_analytics analyze
-fi
-
-# 6. Run Task 02, then independently reverify the published release.
-python -m damage_analytics --config config/task02.toml curate
-python -m damage_analytics --config config/task02.toml verify-curation
-
-# 7. Examine the machine-readable quality report and release location.
-python -m damage_analytics curation-report
-python -m json.tool outputs/task02/latest.json
-python -m json.tool outputs/task02/quality_report.json
-
-# 8. Run all synthetic tests and lint checks, including Task 01 regression tests.
-python -m pytest -q
-python -m ruff check src tests
-```
-
-To inspect individual tables without guessing the content-addressed release path:
-
-```bash
-python - <<'PY'
-import csv
-import json
-from pathlib import Path
-root = Path('outputs/task02')
-release = root / json.loads((root / 'latest.json').read_text())['release_path']
-print('Release:', release)
-for name in ('exclusions.csv', 'class_statistics.csv', 'decisions.csv'):
-    with (release / name).open(newline='', encoding='utf-8') as stream:
-        rows = list(csv.DictReader(stream))
-    print(name, 'rows:', len(rows), 'first five:', rows[:5])
-for split in ('train', 'validation', 'test'):
-    with (release / 'splits' / f'{split}.csv').open(newline='', encoding='utf-8') as stream:
-        print(split, 'samples:', len(list(csv.DictReader(stream))))
-PY
-```
-
-Task 02 additions and generated artifacts:
-
-```text
-src/damage_analytics/curation/
-├── __init__.py
-├── config.py              # Policies and Task 01 path reuse
-├── geometry.py            # Simple-ring intersection/area checks
-├── cleaning.py            # Per-shape decisions, no hidden repairs
-├── images.py              # EXIF evidence and explicit RGB derivatives
-├── metadata.py            # Conservative camera/time session candidates
-├── masks.py               # Class coverage and pixel invariants
-├── similarity.py          # Fingerprints, evidence edges, connected groups
-├── samples.py             # Per-sample export and exact-image conflicts
-├── splitting.py           # Deterministic grouped multi-label search
-├── provenance.py          # Archive/member integrity and release identity
-├── reporting.py           # Tables, class statistics and Task 01 audit
-├── verification.py        # Saved-image/mask/source/partition verification
-└── pipeline.py            # Staging, publication, idempotence and frozen versions
-
-tests/
-├── test_curation_geometry.py
-├── test_curation_images.py
-├── test_curation_metadata.py
-├── test_curation_similarity.py
-├── test_curation_splits.py
-└── test_curation_pipeline.py
-
-outputs/task02/                         # All ignored by Git
-├── latest.json                        # Convenience pointer, not a mutable split
-├── quality_report.json                # Latest report copy
-└── versions/<dataset-version>/         # Sealed; never overwritten
-    ├── release.json                   # Config, seed, code/environment/input hashes
-    ├── checksums.json                 # Hashes of every other release file
-    ├── source_inventory.csv           # Every archived/extracted member fingerprint
-    ├── sample_audit.csv               # Readability/mode/format/frame/check status for all IDs
-    ├── task01_audit.json               # Every historical issue and its current disposition
-    ├── curated_manifest.csv
-    ├── exclusions.csv
-    ├── decisions.csv
-    ├── errors.csv
-    ├── similarity_edges.csv
-    ├── groups.csv
-    ├── statistics.json
-    ├── class_statistics.csv
-    ├── dimensions.csv
-    ├── split_statistics.json
-    ├── quality_report.json
-    ├── splits/{train,validation,test}.csv
-    ├── images/<number>.png             # RGB, declared annotation frame; original resolution
-    ├── annotations/<number>.json       # Original labels, explicit cleaned vertices
-    └── masks/<number>.png              # Lossless class IDs 0–8
-```
-
-Identical inputs, policies, code, environment, and Task 01 evidence select the same
-release. Rerunning verifies and reuses it without rewriting its test split. A changed
-input/policy/code/environment/evidence snapshot creates a new version; pin the chosen
-version and test CSV hash before modeling. Do not regenerate test membership to
-improve a model result. Pixel-level consistency checks use the documented Pillow
-rasterizer; they do not establish independent expert correctness of the annotations.
-
-The default policy does not clamp negative coordinates or repair non-simple rings.
-It permits exact redundant-vertex removal, preserves boundary-edge conventions,
-aligns EXIF only when dimensions identify the frame, and logs RGB conversion.
-Cross-class overlaps and exact-image annotation conflicts are excluded. Same-class
-overlaps are accepted as unions. Identical image+mask duplicates may be collapsed;
-near-duplicate candidates are retained but grouped. No rare-class rebalancing occurs.
-
-See [dataset.md](docs/dataset.md#task-02-curation-policy-and-evidence) for interpretation
-limits and [task_02.md](docs/learning/task_02.md) for all operations and decisions.
-
-### Verified Task 02 result
-
-Final release: `rc1841-curated-v1-d34771dbb662406a` (28 October 2026).
-All 1,841 images and annotations were readable and matched original archive member
-bytes. **1,617 pairs retained; 224 excluded.** Exported derivatives, full mask grids,
-label fidelity, source hashes, and exact split partitions passed verification.
-
-| Split | Samples | Fraction | Evidence components |
-| --- | ---: | ---: | ---: |
-| Train | 1,132 | 70.0062% | 898 |
-| Validation | 243 | 15.0278% | 192 |
-| Test | 242 | 14.9660% | 189 |
-
-All eight foreground classes occur in every split. There are 1,279 curated evidence
-components; the largest has 27 retained samples from a 29-image temporal sequence.
-Zero duplicate manifest IDs, cross-split evidence edges, or cross-split components
-were found. Physical source identity remains unverified, so this is not a global
-leakage-free claim. The verdict is **CONDITIONAL_RESEARCH_USE**.
-
-Exclusion reasons overlap: 171 non-simple source/pixel rings, two out-of-bounds
-annotations, 26 cross-class overlaps, 24 exact-image annotation conflicts, and four
-members of exact-image groups with unusable annotations. These refer to 224 unique
-IDs, not their sum. Of 29 evaluated EXIF alignments, 27 survive all checks; 17 of 26
-redundant-vertex cleanups survive, and the one CMYK conversion survives. Five retained
-samples have accepted same-class overlaps. No identical image+mask pair remained
-eligible for deduplication; the exact-image groups had conflicting/unusable annotations.
-
-The curated set has 779,919,568 pixels and 252 multi-label images. Foreground pixel
-imbalance is approximately 336.91:1. Concrete crushing (44 images) and structural
-deformation (46) are flagged as rare under the configured threshold of 60; neither
-is automatically discarded or rebalanced. Exact global/split class counts are in
-`class_statistics.csv` and the quality report. Similarity evidence includes 674
-near-image candidate edges, 82 near-annotation candidate edges, and 28 temporal
-candidate edges across the full audited population, including excluded nodes.
-
-The final synthetic test suite passes **89 tests and 21 subtests**, with no skips;
-Ruff passes. No installation or download commands were executed for Task 02. Pin
-the final test CSV SHA-256 before modeling:
-
-```text
-455e76654739e3e91c71553946cb0863ce355ebc32d02e1584e0080379f9a9f7
-```
-
-An earlier processing-only release remains as immutable history; `latest.json` points
-to the final version that includes capture-session evidence. Neither release has
-been used for model tuning. Expert review, source identification, and category
-terminology resolution remain prerequisites for stronger benchmark claims.
-
-## Task 03 semantic segmentation
-
-`config/task03.toml` pins `rc1841-curated-v1-d34771dbb662406a` and the SHA-256 of its
-sealed checksum manifest. Task 03 never follows `latest.json`, reruns curation, recreates
-splits, or changes Task 01/02 code or data. It uses their existing 1,132/243/242 splits.
-The added `training` dependency extra declares PyTorch; torchvision is unnecessary.
-No dependency, dataset, or pretrained-weight installation/download was executed.
-
-Run from the repository root. Installation is an instruction for you, not an operation
-performed during implementation. Use a Python/OS/PyTorch combination with compatible
-wheels; package installation and PyTorch runtime compatibility are unverified here.
-
-```bash
-# 1. Create only if necessary, then activate.
-if [ ! -d .venv ]; then
-    python3 -m venv .venv
-fi
-source .venv/bin/activate
-
-# 2. Install declared extras when permitted. NOT executed during implementation.
-python -m pip install -e '.[dev,training]'
-
-# 3. Verify the exact pinned release and audit resizing before training.
-python -m damage_analytics.training verify-data
-python -m damage_analytics.training audit-data
-
-# 4. Inspect actual tensor batches and run a tiny synthetic CPU smoke test.
-python -m damage_analytics.training inspect-loader
-python -m damage_analytics.training smoke
-
-# 5. Run tests, then check tiny-subset memorization before a full experiment.
-python -m pytest -q
-python -m ruff check src tests
-python -m damage_analytics.training overfit --run-id overfit_001
-
-# 6. Train normally; only train and validation are consumed.
-python -m damage_analytics.training train --run-id unet_001
-
-# 7. Evaluate the best checkpoint on validation and generate comparisons.
-python -m damage_analytics.training validate \
-  --checkpoint outputs/task03/experiments/unet_001/best.pt
-
-# 8. Predict one known VALIDATION image, using the checkpoint's saved preprocessing.
-python -m damage_analytics.training predict \
-  --checkpoint outputs/task03/experiments/unet_001/best.pt \
-  --image outputs/task02/versions/rc1841-curated-v1-d34771dbb662406a/images/000016.png \
-  --prediction-id validation_example_001
-```
-
-Use `--device cpu` before the subcommand to force CPU, for example:
-`python -m damage_analytics.training --device cpu train --run-id cpu_001`.
-`auto` chooses available Apple MPS, otherwise CPU; unsupported MPS/deterministic
-operations fail visibly. There is no hidden runtime fallback or cross-device bitwise guarantee.
-
-Historical Task 03 protocol only: its final test has now already been executed.
-**Do not rerun this command for Task 04 models or comparisons.** The original explicit
-final-evaluation command is retained here to document Task 03:
-
-```bash
-python -m damage_analytics.training final-test \
-  --checkpoint outputs/task03/experiments/unet_001/best.pt
-```
-
-Final test requires a completed normal run's validation-selected best checkpoint and
-refuses synthetic/overfit models. Its result directory cannot be overwritten. This
-guard does not prevent deliberate test tuning across different experiments; maintain
-the protocol. Ordinary prediction rejects known test-release image paths/hashes.
-Integrity verification reads sealed test file bytes and partition metadata only;
-train/validation auditing does not decode or evaluate test samples.
-
-### Task 03 architecture and output locations
-
-```text
-config/task03.toml
-src/damage_analytics/training/
-├── __init__.py
-├── __main__.py
-├── cli.py                  # Separate Task 03 commands; earlier entrypoints untouched
-├── config.py               # Hyperparameters, path validation, ignore-index convention
-├── manifests.py            # Pinned seals/schemas/partitions, selected-pair verification
-├── transforms.py           # Shared crop/letterbox/flip geometry; RGB-only normalization
-├── dataset.py              # PyTorch Dataset, collator, seeded DataLoader
-├── audit.py                # Train/validation resize fidelity and train-only class weights
-├── weights.py              # Capped inverse-square-root training pixel weights
-├── model.py                # Configurable lightweight nine-logit GroupNorm U-Net
-├── losses.py               # Ignored-padding cross entropy and optional foreground Dice
-├── metrics.py              # Pooled confusion counts, IoU/Dice/precision/recall
-├── runtime.py              # Seed setup and available MPS/CPU selection
-├── checkpoints.py          # Atomic state saves and explicit weights-only loading
-├── experiments.py          # New run directories, code/environment/dataset provenance
-├── engine.py               # Epoch loops, AdamW, clipping, early stopping, best/last states
-├── evaluation.py           # Native-resolution validation and explicit final test
-├── inference.py            # Native-size ID predictions, no severity interpretation
-├── plots.py                # Loss curves, confusion plot, RGB/GT/prediction comparisons
-└── smoke.py                # Three-step synthetic CPU/checkpoint diagnostic
-
-tests/
-├── conftest.py             # Tiny sealed synthetic release fixture
-├── test_training_data.py
-├── test_training_metrics.py
-└── test_training_torch.py
-
-docs/learning/task_03.md
-outputs/task03/                             # Git-ignored
-├── data_verification.json                  # Generated here
-├── implementation_checks.json              # Actual checks, skipped tests and blockers
-├── data_audit/                             # Generated here
-│   ├── resize_audit.json
-│   ├── resize_occurrences.csv
-│   └── training_class_weights.json
-├── loader_inspection.json                  # Requires PyTorch; not generated here
-├── synthetic_smoke/                        # Requires PyTorch
-│   ├── synthetic.pt
-│   └── smoke.json
-├── experiments/<run-id>/                    # Requires PyTorch
-│   ├── run.json
-│   ├── class_weights.json
-│   ├── history.csv
-│   ├── history.json
-│   ├── learning_curves.png
-│   ├── best.pt
-│   ├── last.pt
-│   ├── best_validation_metrics.json
-│   └── status.json
-├── evaluations/<checkpoint-hash-prefix>/    # Requires PyTorch
-│   ├── validation/
-│   └── test_final/
-│       # Each successful evaluation: metrics.json, per_class.csv,
-│       # confusion_matrix.npy/.png, comparisons/*.png
-└── inference/<prediction-id>/               # Requires PyTorch
-    ├── prediction_ids.png
-    ├── comparison.png
-    └── prediction.json
-```
-
-Run IDs, prediction IDs, smoke output, and evaluation directories refuse overwrites.
-Read existing artifacts or choose a new ID; do not delete evidence to select favorable
-results. `best.pt` tracks every strict validation foreground-mIoU improvement;
-`min_delta` separately controls early-stopping patience. Checkpoints include optimizer
-state, but this task does not implement exact interrupted-run resume.
-
-Input images become float32 N×3×H×W tensors; targets are int64 N×H×W. Source IDs remain
-0–8. Padding uses **255 only as an ignored target**, not a tenth class. Images preserve
-aspect ratio and use bilinear resizing; masks always use nearest-neighbor. Training
-may use synchronized flips and configurable source-resolution foreground-aware crops.
-Validation/inference use full images. Metrics compare native ground truth with unpadded
-predicted IDs nearest-restored to native resolution, avoiding resized-target evaluation
-that could hide thin-crack losses. Epoch losses are valid-pixel-weighted batch means;
-metrics instead pool confusion counts over the entire split.
-
-### Actual Task 03 verification
-
-- The pinned release seal and all artifact checksums passed; 1,132 train and 243
-  validation RGB/mask pairs were decoded with aligned sizes and valid IDs/counts.
-- At 256×256, no foreground class vanished completely from a train/validation image.
-  Microcrack resize/restore recall is 95.6384% train and 95.0950% validation;
-  minor-spalling recall is 97.0153% and 96.3013%. Individual fragments can still disappear.
-  These are **mask resampling diagnostics, not model results or an upper performance bound**.
-- Training-only weights were calculated from the 1,132 training manifest rows. Native
-  counts approximate the augmented distribution; cropping intentionally biases sampling.
-- **112 tests and 21 subtests passed; eight PyTorch tests skipped. Ruff passed.**
-  DataLoader/model/loss/backprop/checkpoint/training/evaluation/inference execution remains
-  unverified because PyTorch is absent. `inspect-loader` and `smoke` exited 2 with a clear
-  missing-dependency message; installation was not attempted.
-- No model checkpoint, learned metric, test prediction, or test evaluation was generated.
-  Task 02's conditional research-use/source-identity limitations still apply. Segmentation
-  classes are never reported as structural safety or severity scores.
-
-The bullets above record the initial Task 03 implementation. Task 04 below records
-the subsequently available trained baseline and current runtime verification.
-
-## Task 04 improvements and damage analytics
-
-Task 04 preserves Task 01–03 implementations, the original `unet_001` files and frozen
-splits. Settings live in `config/task04.toml`; a separate
-`python -m damage_analytics.analytics` entrypoint has **no final-test command**.
-No dependencies were installed/downloaded and no real-data improvement training was
-launched during implementation. Existing torch 2.15.0 runs on CPU here; MPS is unavailable.
-Task 04 defaults to strict deterministic CPU. An earlier Task 03 MPS sanity run failed
-on an unsupported deterministic operation. To deliberately use MPS, set `device="mps"`
-and `deterministic=false` in Task 04's TOML before training **all** comparison runs;
-document the nondeterminism and rerun the matched control under that same policy.
-
-### Verified baseline findings
-
-Fresh validation inference on all 243 images exactly reproduces epoch 48's foreground
-mIoU **0.23990623390029908** and confusion matrix. Saved checkpoint score, history,
-status, split provenance and ground-truth support agree. The full 50-epoch history
-shows an improving training loss and noisier validation behavior; this suggests a
-generalization/optimization gap, without proving a single cause.
-
-| Category | Validation IoU | Precision | Recall | Main concern |
-| --- | ---: | ---: | ---: | --- |
-| Microcrack | 0.1691 | 0.2014 | 0.5133 | Thin regions and false positives |
-| Structural crack | 0.4075 | 0.4489 | 0.8157 | Overprediction/class confusion |
-| Minor spalling | 0.1052 | 0.1079 | 0.8048 | Predicted area is 7.46× annotated area |
-| Moderate spalling | 0.2328 | 0.4808 | 0.3110 | Misses, often labeled corrosion |
-| Delamination | 0.1525 | 0.5341 | 0.1759 | Frequently labeled corrosion |
-| Rebar corrosion | 0.5786 | 0.6660 | 0.8150 | Strongest foreground class, still imperfect |
-| Concrete crushing | 0.0093 | 0.6910 | 0.0094 | Almost entirely missed; seven validation images |
-| Structural deformation | 0.2642 | 0.2915 | 0.7386 | Many false positives; seven validation images |
-
-The fixed-prefix gallery and targeted cases were inspected. `damage490` overpredicts
-minor spalling; `damage801` misses annotated crushing and predicts delamination;
-`Image_119_3665189` confuses corrosion/spalling with deformation. Targeted galleries
-are explicitly worst-case diagnostic selections, not representative accuracy samples.
-Class weighting is a plausible contributor, not an established cause without ablation.
-
-### Controlled manual experiments
-
-| Name | Change from saved baseline | Hypothesis / tradeoff |
-| --- | --- | --- |
-| `control` | None in model/data/optimizer/seed | Replay on the current backend for fair comparisons |
-| `capped_weights` | CE maximum class weight 10 → 1 | Soften rare-pixel false-positive bias; recall may fall |
-| `resolution_384` | Input grid 256² → 384² | Preserve detail; nominal input-pixel compute is 2.25× |
-
-All retain CE + foreground Dice, architecture, seed, batch size, epoch cap and selection
-rule. The cap changes only that hyperparameter; background and lower existing weights
-remain unchanged. Original training used nondeterministic MPS, while current runs use
-the configured backend/determinism, so variants should be judged primarily against a
-fresh matched control. Comparison rejects incompatible splits, native support,
-settings, training backend/library versions or core training code.
-
-The executed **resampling-only** audit improves validation Microcrack recall from
-95.0950% to 97.5469% at 384². This supports investigating resolution; it is not model
-accuracy, a guaranteed improvement, or a model-performance upper bound. Real-data
-training for all three designs remains manual and unexecuted here.
-
-### Damage and supported spalling labels
-
-Native class-ID masks produce exact per-class pixel counts/image percentages,
-4/8-connected semantic regions, exclusive-maximum bounding boxes, centroids, fill
-fractions, boundary flags and mixed foreground complexes. Counts are image-space
-measurements, not physical area, crack width, concrete-only surface coverage or safety.
-A reporting-size filter never changes masks or area totals. Background components are
-not counted as damage. Connected components are not verified physical instances.
-
-Only source classes **Minor spalling** and **Moderate spalling** can yield a scoped,
-category-derived label. Mixed/unsupported regions and low-score heuristic cases are
-explicitly handled. Maximum softmax and normalized entropy remain **uncalibrated**;
-no calibrated confidence or global severity/safety score is produced. Mask-only input
-has unknown model uncertainty. A confident-looking segmentation can still be wrong.
-
-The supervision audit finds:
-
-| Category | Train regions / images / groups | Validation regions / images / groups |
-| --- | --- | --- |
-| Minor spalling | 121 / 54 / 36 | 30 / 12 / 6 |
-| Moderate spalling | 85 / 78 / 67 | 21 / 17 / 12 |
-
-Regions sharing images/groups are correlated. Only six known minor-spalling validation
-groups are available, and labels share the segmentation annotation lineage. A separate
-**independent severity classifier is not justified or trained**. A future constrained
-category-discrimination study would require explicit scope, expert review and stronger
-independent evaluation; neither names nor area percentages establish overall severity.
-
-### Task 04 commands
-
-Use existing dependencies; installation is not part of this task. Run from the root:
-
-```bash
-source .venv/bin/activate
-python -m damage_analytics.analytics audit-baseline
-python -m damage_analytics.analytics plan
-python -m damage_analytics.analytics resolution-audit
-python -m damage_analytics.analytics supervision
-python -m pytest -q
-python -m ruff check src tests
-```
-
-The completed baseline audit is sealed and reused idempotently if its inputs/policies
-still match. Existing review/inference IDs refuse overwrites; view the implementation's
-generated examples or choose a fresh report ID:
-
-```bash
-python -m json.tool outputs/task04/baseline_audit/audit.json
-python -m json.tool outputs/task04/severity_supervision/assessment.json
-python -m damage_analytics.analytics predict \
-  --checkpoint outputs/task03/experiments/unet_001/best.pt \
-  --image outputs/task02/versions/rc1841-curated-v1-d34771dbb662406a/images/000016.png \
-  --report-id validation_demo_002
-python -m damage_analytics.analytics analyze-mask \
-  --mask outputs/task04/inference/validation_demo_002/prediction_ids.png \
-  --report-id existing_mask_002
-```
-
-The following are **manual, potentially lengthy training commands**. They were not run
-on real data during implementation. Review the plan/budget first; execute individually:
-
-```bash
-python -m damage_analytics.analytics train --experiment control --run-id control_s42
-python -m damage_analytics.analytics train --experiment capped_weights --run-id capped_s42
-python -m damage_analytics.analytics train --experiment resolution_384 --run-id resolution384_s42
-
-python -m damage_analytics.analytics evaluate --run-id control_s42
-python -m damage_analytics.analytics evaluate --run-id capped_s42
-python -m damage_analytics.analytics evaluate --run-id resolution384_s42
-python -m damage_analytics.analytics compare \
-  --run-id control_s42 --run-id capped_s42 --run-id resolution384_s42 \
-  --comparison-id controlled_s42
-```
-
-Per-class metrics and descriptive paired validation-group bootstrap intervals accompany
-comparisons. They do not account for training-seed variance, unknown physical sources,
-adaptive validation selection or multiple comparisons. Do not declare generalization
-from these comparisons; the already-used test stays excluded. Confirmatory claims
-would need genuinely new independent evaluation data.
-
-### Task 04 structure and outputs
-
-```text
-config/task04.toml
-src/damage_analytics/analytics/
-├── __init__.py
-├── __main__.py
-├── config.py         # Typed policies and baseline/input protection
-├── cli.py            # No test-evaluation command; training is explicit
-├── baseline.py       # History/checkpoint/report audit and error diagnosis
-├── validation.py     # Fresh validation inference and independent confusion counting
-├── experiments.py    # Saved-baseline settings, registered variants and manual training
-├── comparison.py     # Fairness gates, per-class tables, paired descriptive bootstrap
-├── components.py     # Exact run-length connected components without new dependencies
-├── regions.py        # Pixel-space region measurements and uncertainty summaries
-├── severity.py       # Only supported category-derived spalling labels
-├── supervision.py    # Pure/mixed region counts and independent-group limitations
-├── inference.py      # Native alignment, score maps and structured reports
-└── review.py         # Explicitly targeted worst-case validation galleries
-tests/
-├── test_analytics_regions.py
-├── test_analytics_comparison.py
-└── test_analytics_workflow.py
-docs/learning/task_04.md
-outputs/task04/
-├── implementation_report.json    # Actual checks and executed/unexecuted distinction
-├── baseline_audit/               # Executed: audit.json, class_errors.csv, checksums.json
-│   └── validation/               # Fresh metrics, per-class/per-image confusion,
-│                                 # predictions, comparisons and provenance
-├── experiment_plan.json         # Designs only; no model improvements claimed
-├── plans/*.json
-├── resolution_audit/             # Executed: 256² and 384² resampling diagnostics
-├── severity_supervision/         # Executed: assessment, candidates, all-complex audit
-├── targeted_validation_review/   # Executed: labeled worst-case galleries
-├── inference/baseline_validation_000016/ # Executed: native mask, score maps, damage_report.json
-├── development_history/         # Earlier implementation snapshots, not extra model trials
-├── experiments/<run-id>/         # Expected only after manual real-data training
-├── evaluations/<checkpoint-hash>/validation/ # Expected after evaluating those runs
-└── comparisons/<comparison-id>/ # Expected after manual comparison
-```
-
-The original analytics delivery included tested synthetic integration and real baseline-image
-inference. **154 tests and 21 subtests passed at that stage; Ruff passed.** The user has since
-completed the 50-epoch CPU `control_s42` run (best validation mIoU **0.2431215908**, epoch 48).
-No improvement variant or region-severity classifier has been trained, and no Task 03
-final-test score was consumed for Task 04 selection or benchmarking. See the complete
-[Task 04 lesson](docs/learning/task_04.md) for mathematics, findings, caveats and viva questions.
-
-### Task 04: training performance
-
-The shared trainer now supports bounded verified decoding caches, persistent workers
-with correct epoch propagation, optional channels-last storage, explicit validation
-cadence and tagged exploratory runs. It retains the original architecture, loss
-mathematics, frozen splits and checkpoints. CPU prediction extraction and device scalar
-handling were optimized without dropping native validation pixels. New histories record
-training, validation and artifact times; plotting need not run every epoch.
-
-Measured host medians for the same 64 training/validation images, batch size four:
-
-| Execution | Training seconds | Validation seconds |
-| --- | ---: | ---: |
-| Original CPU, four threads | 7.566 | 3.040 |
-| Optimized CPU, four threads | 6.889 | 2.631 |
-| Optional channels-last CPU | 6.018 | 2.136 |
-| MPS, strict determinism explicitly disabled | 1.431 | 0.683 |
-
-These are short throughput probes, not full-run forecasts or segmentation improvements.
-Compute dominates the CPU path. Strict deterministic MPS backward is unsupported for
-the unchanged model's bilinear upsampling in this build; CPU determinism remains the
-default. MPS is an explicit seeded, nondeterministic alternative. Never mix the old
-CPU control and new MPS variants as a matched causal comparison.
-
-```bash
-source .venv/bin/activate
-python -m damage_analytics.analytics profile --report-id my_cpu --samples 64 --repeats 3
-python -m damage_analytics.analytics profile --report-id my_loaders \
-  --suite loaders --samples 1132 --repeats 2
-python -m damage_analytics.analytics profile --report-id my_mps \
-  --device mps --nondeterministic --samples 64 --repeats 3
-python -m damage_analytics.analytics profile --report-id my_mps_batches \
-  --suite batches --device mps --nondeterministic --samples 64 --repeats 3
-python -m damage_analytics.analytics profile-summary \
-  --profile-id my_cpu --profile-id my_loaders --profile-id my_mps \
-  --profile-id my_mps_batches --report-id my_summary
-python -m pytest -q
-python -m ruff check src tests
-```
-
-Profiles write only under `outputs/task04/performance/`, refuse overwrite and never
-consume test samples. They benchmark temporary updates without saving model checkpoints.
-The full [performance lesson](docs/learning/task_04_performance.md) documents memory
-measurement limits, worker/cache/batch sweeps, every new module, validation scheduling,
-and exact commands for matched five-epoch pilots followed by selected full runs.
-No pilot or full training run was launched during performance implementation.
-
-The full 1,132-image loader sweep tested workers 0/2/4, persistence and 0/128 MiB
-caches. MPS with **two persistent workers** measured **1.122 seconds per 64 training
-images**; four workers were only slightly faster with substantially higher process
-memory. Batch eight gave little extra throughput while roughly doubling MPS allocation,
-so batch four and no cache are recommended initially. Use `--workers 2 --persistent-workers`
-with the manual MPS training commands in the lesson. Defaults remain deterministic CPU.
-
-**174 tests and 21 subtests passed, no skips; Ruff passed.** The optimized epoch evaluator
-also reproduced the existing control's confusion matrix exactly across all **54,435,143
-native validation pixels**. Original checkpoints, control artifacts, model architecture,
-paired transforms and dataset seal were verified unchanged. Actual timing tables are in
-`outputs/task04/performance/measured_summary/`; this work establishes execution speed,
-not a learned-model accuracy improvement.
-
-## Task 05: FastAPI backend
-
-`api/` adds resident-model inference, native-resolution Task 04 analytics, private PNG
-artifacts and transactional PostgreSQL metadata. Model loading happens once per worker;
-requests never train or modify weights. A checkpoint and its SHA-256 pin are required.
-Serving needs the checkpoint, not the raw/curated datasets. This API performs no test-set
-evaluation. CPU is default; set `DAMAGE_API_DEVICE=mps` for optional MPS inference.
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /inspections` | Exactly one JPEG/PNG multipart field named `file`; returns result and UUID |
-| `GET /inspections/{id}` | Persisted result, without repeating inference |
-| `GET /inspections/{id}/artifacts/image` | Oriented RGB input as PNG |
-| `GET /inspections/{id}/artifacts/mask` | Aligned L-mode PNG with class IDs 0–8 |
-| `GET /models/current` | Pinned checkpoint, release provenance, preprocessing and class mapping |
-| `GET /health` / `GET /ready` | Process liveness / loaded model and migrated database readiness |
-
-Results retain area percentages, bounding boxes, regions, mixed-category dispositions
-and **uncalibrated** score summaries. They never provide a structural safety score.
-RGB/grayscale input is accepted; grayscale is replicated to RGB, EXIF orientation is
-applied, and embedded metadata is stripped from stored derivatives. Alpha, palette,
-CMYK, animation, malformed content and excessive dimensions/bytes are rejected.
-
-Commands below are **manual only**; installation, PostgreSQL startup, migration and
-server startup were not executed during implementation. From the repository root:
-
-```bash
-source .venv/bin/activate
-python -m pip install -e '.[backend,training,dev]'
-
-# With PostgreSQL already running, as your configured local database administrator:
-createuser --pwprompt damage_app
-createdb --owner=damage_app damage_analytics
-
-# Substitute the password entered above, URL-encoding special characters.
-export DAMAGE_API_DATABASE_URL='postgresql://damage_app:YOUR_URL_ENCODED_PASSWORD@localhost:5432/damage_analytics'
-export DAMAGE_API_CHECKPOINT='outputs/task04/experiments/control_s42/best.pt'
-export DAMAGE_API_CHECKPOINT_SHA256="$(shasum -a 256 "$DAMAGE_API_CHECKPOINT" | cut -d ' ' -f 1)"
-
-psql "$DAMAGE_API_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_initial.sql
-python -m pytest -q tests/test_api_core.py tests/test_api_http.py
-python -m ruff check src/damage_analytics/api tests/test_api_*.py
-
-python -m uvicorn damage_analytics.api.app:create_app --factory \
-  --host 127.0.0.1 --port 8000 --workers 1 --limit-concurrency 16
-```
-
-In another terminal, using an existing image and the UUID returned by the POST:
-
-```bash
-curl --fail-with-body http://127.0.0.1:8000/ready
-curl --fail-with-body -F 'file=@your_image.jpg;type=image/jpeg' http://127.0.0.1:8000/inspections
-curl --fail-with-body http://127.0.0.1:8000/inspections/INSPECTION_UUID
-curl --fail-with-body http://127.0.0.1:8000/models/current
-```
-
-Interactive endpoint schemas are at `/docs`. Bind locally: authentication is outside
-this task. Start with one worker, especially on MPS; each worker owns a model copy.
-
-| Environment variable | Default / purpose |
-| --- | --- |
-| `DAMAGE_API_DATABASE_URL` | Required PostgreSQL URL; never logged |
-| `DAMAGE_API_CHECKPOINT_SHA256` | Required full lowercase SHA-256 pin |
-| `DAMAGE_API_CHECKPOINT` | `outputs/task04/experiments/control_s42/best.pt` |
-| `DAMAGE_API_STORAGE_DIR` | `outputs/task05/inspections` |
-| `DAMAGE_API_DEVICE` / `DAMAGE_API_CPU_THREADS` | `cpu` / `2`; optional device `mps` |
-| `DAMAGE_API_MAX_UPLOAD_BYTES` | `10485760`; multipart envelope also bounded |
-| `DAMAGE_API_MAX_PIXELS` / `DAMAGE_API_MAX_DIMENSION` | `4000000` / `8192` |
-| `DAMAGE_API_UPLOAD_TIMEOUT_SECONDS` | `30` |
-| `DAMAGE_API_DATABASE_TIMEOUT_SECONDS` | `3` connection timeout; SQL timeout is 5 seconds |
-
-Apply numbered SQL files explicitly and in order; startup never migrates. Migration 001
-creates `inspections`, `predictions` and `damage_schema_migrations`; reapplication fails.
-The database stores metadata/JSON only. Back up it **and** the artifact directory together.
-Inference and IO run off the async event loop. Each worker admits one prediction at a
-time and rejects concurrent uploads with 503/`Retry-After`. Errors contain request IDs;
-logs are JSON and omit upload contents, filenames and database exception text.
-
-Files are published before the SQL transaction. If a commit acknowledgement is lost,
-files are retained to avoid breaking a potentially committed inspection. Reconcile
-unreferenced UUID directories against the database using the logged inspection ID;
-do not blindly delete them. Missing/tampered artifacts return a controlled error.
-
-For the optional live database test, first provision a **separate disposable database**,
-apply migration 001 manually there, then set `DAMAGE_TEST_DATABASE_URL` to its URL and
-run `python -m pytest -q tests/test_api_postgres.py`. That test never runs migrations.
-Implementation verification passed 18 focused tests; HTTP and PostgreSQL modules were
-skipped because their dependencies are absent. Those integrations and MPS serving
-remain unverified until dependencies and services are available.
-
-## Task 07: external dataset QA and crack classification
-
-Task 07 adds safe SDNET2018/DamSegment preparation, provenance-pinned grouped splits,
-duplicate review, MobileNetV3-Small/ResNet18 transfer learning, validation-only threshold
-selection and native DamSegment mask evaluation. It leaves the existing serving system
-unchanged. Crack-negative does not mean undamaged; these classifiers are not OOD or
-structural-severity estimators.
-
-Start with [the Task 07 workflow and exact commands](docs/task07.md) and the generated
-`outputs/task07/audit_report.md`. Real extraction/training remain manual. Source grouping
-is provisional until authenticated; final testing is blocked on unresolved quality checks.
-DamSegment annotation category names are undocumented in the local archives and retain
-neutral numeric names. Install the declared `classification` extra locally before real
-backbone runs; no packages or weights were downloaded during implementation.
-
-## Task 08: crack classification reliability
-
-Task 08 investigates grouped splits and mixed-view near duplicates, reproduces saved
-validation metrics, and generates indexed FP/FN/borderline/disagreement galleries,
-ROC/PR curves, material breakdowns and source-only threshold sensitivity. Search telemetry
-now distinguishes distance evaluations from candidate hits. Test images are redacted.
-
-[Task 08 findings, modules and exact Mac commands](docs/task08.md) cover matched 25-epoch
-MobileNet/ResNet runs, early stopping, optional orientation ablations and runtime reports.
-The five-epoch baselines and all frozen releases remain unchanged. No real training was
-launched during implementation; model improvement remains an experiment to measure.
-
-## Task 09: segmentation evaluation and native damage features
-
-Task 09 authenticates/re-scores RC1841 validation masks, audits polygon decoding and
-class imbalance, and adds native-coordinate region geometry with separate reporting
-filters. A load-once pipeline returns validated feature JSON, raw/filtered masks and
-uncalibrated uncertainty summaries. Existing serving behavior is unchanged.
-
-See [Task 09 evidence, modules and exact commands](docs/task09.md) for the matched U-Net
-versus pretrained LR-ASPP experiment. Real training and MPS evaluation remain manual
-and should wait for Task 08 to finish. Cached validation replay and focused CPU checks
-do not use final-test data or invent structural severity targets.
+Dataset and pretrained-weight terms remain applicable to their respective resources. This repository does not grant new rights over third-party datasets or model resources, and no project-wide software license is inferred from their dataset licenses.
